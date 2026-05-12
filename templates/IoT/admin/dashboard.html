@@ -1,0 +1,157 @@
+{% extends "wagtailadmin/base.html" %}
+{% load i18n %}
+
+{% block titletag %}IoT{% endblock %}
+
+{% block extra_css %}
+{% include "IoT/admin/_iot_styles.html" %}
+{% endblock %}
+
+{% block content %}
+<div class="iot-locus">
+  <div class="iot-hero w-mb-4">
+    <h1 class="w-h1 w-mt-0">{% trans "IoT — ringkasan" %}</h1>
+    <p class="w-help" style="margin: 0.2rem 0 0">
+      {% trans "Ringkasan layanan: envelope MQTT (opsi A) dan jembatan. Kelola data di setiap sub-panel atau lewat Snippet." %}
+    </p>
+  </div>
+  {% include "IoT/admin/_iot_subnav.html" %}
+
+  <div class="iot-kpi" role="group" aria-label="{% trans "Ringkasan jumlah" %}">
+    <div class="iot-kpi__card">
+      <div class="iot-kpi__label">{% trans "Active organizations" %}</div>
+      <div class="iot-kpi__value">{{ org_count }}</div>
+    </div>
+    <div class="iot-kpi__card">
+      <div class="iot-kpi__label">{% trans "Devices" %}</div>
+      <div class="iot-kpi__value">{{ device_count }}</div>
+    </div>
+    <div class="iot-kpi__card">
+      <div class="iot-kpi__label">{% trans "Online" %} (≤{{ online_threshold_minutes }} min)</div>
+      <div class="iot-kpi__value">{{ online_count }}</div>
+    </div>
+    <div class="iot-kpi__card" id="iot-mqtt-box" aria-live="polite">
+      <div class="iot-kpi__label">{% trans "MQTT bridge" %}</div>
+      <div class="iot-kpi__value" id="iot-mqtt-txt" style="font-size:1.1rem">…</div>
+    </div>
+  </div>
+
+  <p class="iot-actions">
+    <a href="{{ snippets.organization.list }}">{% trans "Organisasi (Snippet)" %}</a>
+    <a href="{{ snippets.device.list }}">{% trans "Perangkat (Snippet)" %}</a>
+    <a href="{{ snippets.organizationmembership.list }}">{% trans "Keanggotaan (Snippet)" %}</a>
+  </p>
+
+  <div class="iot-panel">
+    <div class="iot-panel__head">
+      <span>{% trans "Perangkat" %} ({{ device_count }}) — {% trans "pratinjau" %} {{ devices|length }}{% if has_more_devices %}+{% endif %}</span>
+      <a class="button button-primary button-small" href="{% url 'iot:panel_devices' %}">{% trans "Buka panel perangkat" %}</a>
+    </div>
+    <div class="iot-panel__body iot-table-wrap">
+      <table class="iot-table" id="iot-dev-table" aria-label="{% trans "Pratinjau perangkat" %}">
+        <thead>
+          <tr>
+            <th scope="col">{% trans "Online" %}</th>
+            <th scope="col">{% trans "Org" %}</th>
+            <th scope="col">{% trans "Name" %}</th>
+            <th scope="col">{% trans "device_id" %}</th>
+            <th scope="col">{% trans "last_seen" %}</th>
+            <th scope="col">channel</th>
+            <th scope="col">schema</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="iot-panel iot-doc">
+    <div class="iot-panel__head">{% trans "Protocol (v1, option A)" %}</div>
+    <div class="iot-panel__body">
+      <p class="w-help" style="margin:0 0 0.5rem"><strong>{% trans "Topik (uplink telemetry)" %}</strong><br>
+        <code class="iot-table__mono" style="display:block;margin-top:0.2rem;">{{ topic_prefix }}/{org_slug}/{device_id}/up/telemetry</code></p>
+      <p class="w-help" style="margin:0 0 0.5rem"><strong>Example topic</strong><br>
+        <code class="iot-table__mono" style="display:block;margin-top:0.2rem;">{{ example_telemetry_topic }}</code></p>
+      <p style="margin:0 0 0.4rem; font-size:0.8125rem;"><strong>Example JSON body</strong></p>
+      <pre class="iot-code-block" id="iot-example-json" aria-label="Contoh body JSON" style="line-height:1.45; margin:0 0 0.75rem;">{
+  "v": {{ envelope_version }},
+  "msg_id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+  "ts": "{{ now_iso }}",
+  "org": "kirei",
+  "device_id": "550e8400-e29b-41d4-a716-446655440000",
+  "channel": "telemetry",
+  "schema": "solar_telemetry.v1",
+  "data": { "power_w": 4500, "voltage_v": 230.5 }
+}</pre>
+      <p class="w-help" style="margin:0">{% trans "Allowed schema strings (server validation):" %} <span class="iot-table__mono" style="font-size:0.75rem;">{{ allowed_schemas|join:", " }}</span></p>
+    </div>
+  </div>
+
+  <div class="iot-panel">
+    <div class="iot-panel__head">{% trans "Validate envelope (JSON string, no publish)" %}</div>
+    <div class="iot-panel__body">
+      <label for="iot-env-raw" class="w-sr-only">JSON</label>
+      <textarea id="iot-env-raw" class="w-w-full" rows="6" style="width:100%; font-family: ui-monospace, monospace; font-size:0.75rem; box-sizing: border-box; border-radius:0.25rem; border:1px solid var(--w-color-border-field); padding:0.5rem;" placeholder='{ "v": 1, ... }'></textarea>
+      <p style="margin: 0.5rem 0 0.25rem;">
+        <button type="button" class="button" id="iot-env-btn">{% trans "Validate" %}</button>
+      </p>
+      <pre class="iot-code-block" id="iot-env-out" style="min-height:2.5rem; color:var(--w-color-text-label);" role="status"></pre>
+    </div>
+  </div>
+</div>
+
+{{ devices|json_script:"iot-devices-data" }}
+<script>
+(function() {
+  var el = document.getElementById("iot-mqtt-txt");
+  if (el) {
+    fetch("{% url 'iot:api_mqtt_bridge' %}", { headers: { "Accept": "application/json" } })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.connected) { el.textContent = "{% trans "Connected" %}"; el.style.color = "var(--iot-ok, #1a7f4b)"; }
+        else { el.textContent = "{% trans "Disconnected" %}"; el.style.color = "#b01717"; }
+      })
+      .catch(function() { el.textContent = "—"; el.style.removeProperty("color"); });
+  }
+
+  var elData = document.getElementById("iot-devices-data");
+  if (!elData) return;
+  var data = JSON.parse(elData.textContent);
+  var tb = document.querySelector("#iot-dev-table tbody");
+  if (!tb) return;
+  data.forEach(function(row) {
+    var tr = document.createElement("tr");
+    tr.innerHTML =
+      "<td><span class=\"status-dot " + (row.online ? "ok" : "no") + "\"></span>" + (row.online ? "on" : "off") + "</td>" +
+      "<td>" + (row.org_slug || "") + "</td>" +
+      "<td>" + (row.name || "") + "</td>" +
+      "<td><code class=iot-table__mono>" + (row.device_id || "") + "</code></td>" +
+      "<td>" + (row.last_seen || "—") + "</td>" +
+      "<td>" + (row.last_channel || "—") + "</td>" +
+      "<td>" + (row.last_schema || "—") + "</td>";
+    tb.appendChild(tr);
+  });
+
+  var btn = document.getElementById("iot-env-btn");
+  var raw = document.getElementById("iot-env-raw");
+  var out = document.getElementById("iot-env-out");
+  if (btn && raw && out) {
+  function csrf() {
+    var c = document.cookie.match(/csrftoken=([^;]+)/);
+    return c ? c[1] : "";
+  }
+  btn.addEventListener("click", function() {
+    out.textContent = "…";
+    fetch("{% url 'iot:api_envelope_preview' %}", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-CSRFToken": csrf() },
+      body: JSON.stringify({ raw: raw.value })
+    })
+      .then(function(r) { return r.json(); })
+      .then(function(d) { out.textContent = JSON.stringify(d, null, 2); })
+      .catch(function(e) { out.textContent = String(e); });
+  });
+  }
+})();
+</script>
+{% endblock %}

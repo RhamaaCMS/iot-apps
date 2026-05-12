@@ -1,0 +1,20 @@
+{% load i18n %}
+<nav class="iot-subnav" aria-label="{% trans "Navigasi IoT" %}">
+  <ul class="iot-subnav__list" role="list">
+    <li class="iot-subnav__item">
+      <a href="{% url 'iot:dashboard' %}" class="button button-small{% if iot_active_section == 'summary' %} iot-nav--active{% endif %}">{% trans "Ringkasan" %}</a>
+    </li>
+    <li class="iot-subnav__item">
+      <a href="{% url 'iot:panel_organizations' %}" class="button button-small{% if iot_active_section == 'organizations' %} iot-nav--active{% endif %}">{% trans "Organisasi" %}</a>
+    </li>
+    <li class="iot-subnav__item">
+      <a href="{% url 'iot:panel_memberships' %}" class="button button-small{% if iot_active_section == 'memberships' %} iot-nav--active{% endif %}">{% trans "Pengguna & organisasi" %}</a>
+    </li>
+    <li class="iot-subnav__item">
+      <a href="{% url 'iot:panel_devices' %}" class="button button-small{% if iot_active_section == 'devices' %} iot-nav--active{% endif %}">{% trans "Perangkat" %}</a>
+    </li>
+    <li class="iot-subnav__item">
+      <a href="{% url 'iot:panel_ota' %}" class="button button-small{% if iot_active_section == 'ota' %} iot-nav--active{% endif %}">OTA</a>
+    </li>
+  </ul>
+</nav>

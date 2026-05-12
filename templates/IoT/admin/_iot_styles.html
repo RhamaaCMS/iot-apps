@@ -1,0 +1,206 @@
+{% comment %}
+  IoT admin: aligned with Wagtail 5+ / 7 design tokens; industrial / utilitarian clarity.
+{% endcomment %}
+<style>
+  /* —— Layout (matches generic admin content rhythm) —— */
+  .iot-locus {
+    --iot-border: var(--w-color-border-field, #d9d9d9);
+    --iot-ink: var(--w-color-text-label, #262626);
+    --iot-muted: var(--w-color-text-meta, #737373);
+    --iot-surface: var(--w-color-surface-page, #fff);
+    --iot-field: var(--w-color-surface-field, #f5f5f5);
+    --iot-ok: #1a7f4b;
+    --iot-int: var(--w-color-interactive, #007d7e);
+    max-width: 78rem;
+    margin-inline: auto;
+    margin-top: 0.5rem;
+    margin-bottom: 2rem;
+    padding-inline: clamp(0.75rem, 2.5vw, 1.75rem);
+  }
+  @media (min-width: 1024px) { .iot-locus { margin-top: 0.25rem; } }
+
+  .iot-hero h1 { letter-spacing: -0.02em; }
+  .iot-hero .w-help { color: var(--iot-muted); max-width: 52ch; }
+
+  /* —— Subnav (Wagtail button as tabs) —— */
+  .iot-subnav { margin-bottom: 1.5rem; }
+  .iot-subnav__list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 0.35rem 0.5rem;
+  }
+  .iot-subnav__item { margin: 0; }
+  .iot-subnav__item a.button { margin: 0; }
+  .iot-subnav a.button { border-radius: 0.2rem; font-weight: 500; }
+  .iot-subnav a.iot-nav--active {
+    background: color-mix(in srgb, var(--iot-int) 14%, var(--iot-surface)) !important;
+    color: var(--iot-int) !important;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--iot-int) 50%, transparent);
+  }
+  .w-theme-dark .iot-subnav a.iot-nav--active,
+  :where(.w-theme-dark) .iot-subnav a.iot-nav--active {
+    background: color-mix(in srgb, var(--iot-int) 20%, #1a1a1a) !important;
+  }
+
+  /* —— Surfaces (panels) —— */
+  .iot-panel {
+    background: var(--iot-surface);
+    border: 1px solid var(--iot-border);
+    border-radius: 0.35rem;
+    margin-bottom: 1rem;
+    box-shadow: 0 1px 0 color-mix(in srgb, var(--iot-ink) 4%, transparent);
+  }
+  .iot-panel__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.5rem 0.75rem;
+    padding: 0.65rem 1rem;
+    background: var(--iot-field);
+    border-bottom: 1px solid var(--iot-border);
+    font-weight: 600;
+    font-size: 0.8125rem;
+    line-height: 1.3;
+    color: var(--iot-ink);
+  }
+  .iot-panel__body { padding: 0.85rem 1rem; font-size: 0.8125rem; }
+
+  /* —— Data tables —— */
+  .iot-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .iot-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8125rem;
+  }
+  .iot-table th,
+  .iot-table td {
+    padding: 0.5rem 0.55rem;
+    text-align: left;
+    border-bottom: 1px solid color-mix(in srgb, var(--iot-border) 80%, transparent);
+    vertical-align: top;
+  }
+  .iot-table th {
+    color: var(--iot-muted);
+    font-weight: 500;
+    font-size: 0.75rem;
+    text-transform: none;
+  }
+  .iot-table tbody tr:hover td { background: color-mix(in srgb, var(--iot-int) 4%, transparent); }
+  .iot-table__mono { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 0.7rem; word-break: break-all; }
+  .iot-link-quiet { color: var(--iot-int); text-decoration: none; }
+  .iot-link-quiet:hover { text-decoration: underline; }
+
+  /* —— Status —— */
+  .status-dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; display: inline-block; margin-right: 0.4rem; vertical-align: 0.05em; }
+  .status-dot.ok { background: var(--iot-ok); box-shadow: 0 0 0 1px color-mix(in srgb, var(--iot-ok) 30%, #fff); }
+  .status-dot.no { background: #9ca3af; }
+
+  /* —— Dashboard KPI —— */
+  .iot-kpi {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 1.25rem;
+  }
+  .iot-kpi__card {
+    background: var(--iot-surface);
+    border: 1px solid var(--iot-border);
+    border-radius: 0.35rem;
+    padding: 0.85rem 1rem;
+    position: relative;
+    overflow: hidden;
+  }
+  .iot-kpi__card::before {
+    content: "";
+    position: absolute; left: 0; right: 0; top: 0; height: 3px;
+    background: linear-gradient(90deg, var(--iot-int), color-mix(in srgb, var(--iot-int) 40%, #2dd4bf));
+  }
+  .iot-kpi__value { font-size: 1.4rem; font-weight: 700; line-height: 1.1; color: var(--iot-ink); }
+  .iot-kpi__label { font-size: 0.6875rem; color: var(--iot-muted); margin-top: 0.2rem; text-transform: uppercase; letter-spacing: 0.04em; }
+
+  .iot-code-block {
+    background: var(--iot-field);
+    color: var(--iot-ink);
+    padding: 0.6rem 0.75rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    overflow: auto;
+    max-width: 100%;
+  }
+  .iot-actions { margin: 0 0 1.25rem; }
+  .iot-actions a { margin-right: 1rem; color: var(--iot-int); text-decoration: none; font-size: 0.8125rem; font-weight: 500; }
+  .iot-actions a:hover { text-decoration: underline; }
+
+  /* —— Device panel: MQTT drawer —— */
+  .iot-mqtt-expand > td { padding: 0 !important; border: none; background: var(--w-color-surface-furniture, #f8f8f8); }
+  :where(.w-theme-dark) .iot-mqtt-expand > td { background: color-mix(in srgb, #fff 4%, #0f0f0f); }
+  .iot-mqtt-box { max-width: 100%; }
+  .iot-mqtt-hint { padding: 0.4rem 0.15rem; font-size: 0.75rem; color: var(--iot-muted); }
+  [data-iot-mqtt-content] { padding: 0.2rem 0.15rem 0.4rem; transition: opacity 0.15s ease; }
+  [data-iot-mqtt-content].is-loading { opacity: 0.5; }
+  [data-iot-mqtt-content].is-error { color: #b01717; font-size: 0.8125rem; }
+  .iot-mqtt-pref { font-size: 0.75rem; line-height: 1.4; color: var(--iot-muted); margin: 0 0 0.5rem; word-break: break-all; }
+  .iot-mqtt-pref code { font-size: 0.7rem; color: var(--iot-ink); background: var(--iot-field); padding: 0.1em 0.3em; border-radius: 0.2rem; }
+  .iot-mqtt-logtable {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 0.75rem;
+    background: var(--iot-surface);
+    border: 1px solid var(--iot-border);
+    border-radius: 0.3rem;
+  }
+  .iot-mqtt-logtable th, .iot-mqtt-logtable td { padding: 0.4rem 0.45rem; border-bottom: 1px solid var(--iot-border); vertical-align: top; }
+  .iot-mqtt-logtable th { text-align: left; color: var(--iot-muted); font-size: 0.6875rem; font-weight: 600; background: var(--iot-field); }
+  .iot-mqtt-logtable tr:last-child td { border-bottom: 0; }
+  .iot-mqtt-payload {
+    max-height: 11.25rem;
+    overflow: auto;
+    margin: 0;
+    padding: 0.4rem 0.5rem;
+    background: #1a1a1a;
+    color: #e5e5e5;
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    font-size: 0.66rem;
+    line-height: 1.4;
+    border-radius: 0.2rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .iot-mqtt-payload--out { background: #15232e; }
+  :where(.w-theme-dark) .iot-mqtt-payload { background: #252525; }
+  :where(.w-theme-dark) .iot-mqtt-payload--out { background: #1a2830; }
+  .iot-mqtt-direction {
+    display: inline-block;
+    padding: 0.1rem 0.4rem;
+    border-radius: 0.15rem;
+    font-size: 0.625rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .iot-mqtt-direction--in { background: #e8f4ea; color: #166534; }
+  .iot-mqtt-direction--out { background: #e2eef8; color: #0c4a6e; }
+  :where(.w-theme-dark) .iot-mqtt-direction--in { background: #1e3a2a; color: #86efac; }
+  :where(.w-theme-dark) .iot-mqtt-direction--out { background: #1e2f3a; color: #7dd3fc; }
+  .iot-mqtt-toggle:focus { outline: 2px solid color-mix(in srgb, var(--iot-int) 70%, #fff); outline-offset: 2px; }
+  .iot-mqtt-row--live { animation: iot-mqtt-live 1.2s ease-out; }
+  @keyframes iot-mqtt-live {
+    from { background: color-mix(in srgb, var(--w-color-interactive) 16%, transparent); }
+    to { background: transparent; }
+  }
+  :where(.w-theme-dark) .iot-mqtt-row--live { animation-name: iot-mqtt-live-d; }
+  @keyframes iot-mqtt-live-d {
+    from { background: color-mix(in srgb, var(--w-color-interactive) 22%, #0c0c0c); }
+    to { background: transparent; }
+  }
+  .iot-mqtt-ws-pill { font-size: 0.75rem; margin: 0.4rem 0 0; color: var(--w-color-text-meta, #666); }
+  .iot-mqtt-ws-pill .status-dot { vertical-align: 0.1em; }
+  .iot-mqtt-ws-pill .status-dot.ok { opacity: 1; }
+  .iot-mqtt-ws-pill .status-dot.no { opacity: 0.5; }
+</style>

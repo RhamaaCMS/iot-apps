@@ -1,0 +1,136 @@
+{
+  "schema_version": "1.0.0",
+  "name": "IoT",
+  "slug": "iot",
+  "version": "1.1.0",
+  "description": "Multi-tenant MQTT device registry (Organization, Device, memberships) with strict JSON envelope handling, Wagtail admin dashboards, and OTA firmware delivery (signed HTTPS download + MQTT ota_command.v1 / ota_status.v1). Integrates with the project mqtt bridge (apps.mqtt) for publish/subscribe.",
+  "author": "RhamaaCMS",
+
+  "notes": {
+    "module_path": "Python package is apps.IoT (capital IoT) — use exactly that in INSTALLED_APPS and imports.",
+    "re_development": "Start from apps/IoT/docs/protocol.md (envelope + OTA), constants.py (ALLOWED_SCHEMAS, OTA_*), then services.py (ingress) and ota_services.py (jobs + downlink). Wagtail UI is under /admin/iot/; public OTA download is registered on the project root, not in this app’s urls.py."
+  },
+
+  "django": {
+    "installed_apps": [
+      "apps.IoT"
+    ],
+    "middleware": [],
+    "templates": {
+      "dirs": [],
+      "app_dirs": true,
+      "note": "Wagtail admin templates under apps/IoT/templates/IoT/admin/ (include _iot_styles.html, _iot_subnav.html)."
+    },
+    "auth_backends": [],
+    "settings": {
+      "IOT_OTA_PUBLIC_BASE": {
+        "default": null,
+        "note": "Optional. Public origin for OTA download URLs in MQTT (no trailing slash), e.g. https://api.example.com. If unset, ota_services.get_ota_public_base_url() uses django.contrib.sites Site, else DEBUG http://127.0.0.1:8000. Devices must reach this host over HTTPS in production."
+      }
+    }
+  },
+
+  "urls": [
+    {
+      "path": "IoT/",
+      "include": "apps.IoT.urls",
+      "namespace": "IoT",
+      "name": "Public index + future public pages",
+      "note": "Mounted in project solar_monitoring_apps/urls.py. Currently a small index; device admin lives in Wagtail."
+    },
+    {
+      "path": "admin/iot/",
+      "note": "Registered by wagtail_hooks.py (register_admin_urls) — do NOT duplicate in project urls.py. Namespaced as iot: (e.g. iot:dashboard, iot:panel_ota)."
+    },
+    {
+      "path": "ota/firmware/",
+      "name": "iot_ota_firmware_download",
+      "view": "apps.IoT.ota_public_views.ota_public_download",
+      "note": "PROJECT-LEVEL only: add to solar_monitoring_apps/urls.py before Wagtail catch-all. Signed GET ?t= for device firmware download; not behind Wagtail auth."
+    }
+  ],
+
+  "wagtail": {
+    "hooks": [
+      {
+        "hook": "register_admin_menu_item",
+        "file": "apps/IoT/wagtail_hooks.py",
+        "description": "Submenu 'IoT' (order=240) with Ringkasan, Organisasi, Pengguna & organisasi, Perangkat, OTA."
+      },
+      {
+        "hook": "register_admin_urls",
+        "file": "apps/IoT/wagtail_hooks.py",
+        "description": "include((admin_urls, 'iot'), namespace='iot') under path iot/."
+      }
+    ],
+    "snippets": [
+      "Organization — tenant; slug must match MQTT envelope org",
+      "OrganizationMembership — user ↔ org + role",
+      "Device — device_id UUID, last_seen, reported_firmware_version",
+      "FirmwarePackage — binary upload, sha256, product+version unique",
+      "DeviceOTAJob — one OTA attempt; status + job_id; publish from panel_ota"
+    ]
+  },
+
+  "mqtt": {
+    "app": "apps.mqtt",
+    "topic_prefix": "iot/v1",
+    "uplink": "Handler calls apps.IoT.services.process_incoming_mqtt_message from the mqtt app when messages arrive (configure subscription to iot/v1/# or stricter).",
+    "downlink_ota": "ota_services.publish_ota_command → iot/v1/{org_slug}/{device_id}/down/ota, payload JSON ota_command.v1."
+  },
+
+  "ota": {
+    "doc": "apps/IoT/docs/protocol.md (section OTA)",
+    "constants": "apps/IoT/constants.py — OTA_CHANNEL, OTA_SCHEMA_COMMAND, OTA_SCHEMA_STATUS, OTA_DOWNLOAD_SALT, OTA_MAX_FIRMWARE_BYTES",
+    "flow": "Set Device.firmware_product to match FirmwarePackage.product. Create FirmwarePackage (snippet) → panel_ota: create DeviceOTAJob (supersedes other in-flight jobs for device) → Terbitkan (pending) → device GET signed URL → device reports ota_status.v1. Republish available for sent jobs if downlink missed. MQTT publish errors keep job pending."
+  },
+
+  "files": {
+    "constants.py": "ENVELOPE_VERSION, IOT_MQTT_TOPIC_PREFIX, ALLOWED_SCHEMAS, OTA constants.",
+    "models.py": "Organization, OrganizationMembership, Device, FirmwarePackage, DeviceOTAJob; register_snippet on all tenant/firmware types.",
+    "services.py": "parse_iot_uplink_topic, validate_envelope, process_incoming_mqtt_message; dispatches ota_status.v1 to ota_services.apply_ota_status_uplink.",
+    "ota_services.py": "create_ota_job, build_ota_command_json, publish_ota_command, apply_ota_status_uplink, get_ota_public_base_url.",
+    "ota_public_views.py": "ota_public_download — signed token (django.core.signing) with OTA_DOWNLOAD_SALT.",
+    "admin_views.py": "Wagtail panels: dashboard, organizations, memberships, devices, OTA (create job + publish).",
+    "admin_urls.py": "Routes for admin_views (namespace iot).",
+    "admin_snippet_urls.py": "Reverse Wagtail snippet list/add/edit for templates.",
+    "wagtail_hooks.py": "Menu + /admin/iot/ URL include.",
+    "docs/protocol.md": "Human-readable contract for teams and firmware (envelope, telemetry, OTA downlink/uplink).",
+    "migrations/": "Run: python manage.py makemigrations iot && migrate (app label is lowercase 'iot')."
+  },
+
+  "dependencies": {
+    "apps": [
+      "apps.mqtt",
+      "wagtail.snippets"
+    ],
+    "packages": [],
+    "optional_apps": [
+      "channels (if WebSocket MQTT log UI is used in admin)"
+    ],
+    "note": "MQTT client packages come from apps/mqtt (e.g. aiomqtt in project requirements). IoT app uses asgiref.async_to_sync to publish from sync code."
+  },
+
+  "env": {
+    "file": ".env.example",
+    "variables": [
+      { "key": "IOT_OTA_PUBLIC_BASE", "default": "", "required": false, "description": "Public base URL for OTA links (see django.settings IOT_OTA_PUBLIC_BASE)." },
+      { "key": "MQTT_BROKER_HOST", "default": "broker.emqx.io", "required": false, "description": "Project-level MQTT; see base.py and apps/mqtt." }
+    ]
+  },
+
+  "staticfiles": null,
+
+  "post_install": {
+    "migrations": true,
+    "fixtures": [],
+    "management_commands": [],
+    "messages": [
+      "Ensure 'apps.IoT' and 'apps.mqtt' are in INSTALLED_APPS; run migrations for app label 'iot' (e.g. python manage.py migrate iot).",
+      "If OTA is used, register path('ota/firmware/', ota_public_download) in the project urlconf and set IOT_OTA_PUBLIC_BASE in .env in production if Site domain ≠ device-reachable host.",
+      "Point MQTT consumer at process_incoming_mqtt_message; subscribe to cover iot/v1/{org}/{device_id}/up/# and downlink publisher must use the same topic prefix (iot/v1) as constants.IOT_MQTT_TOPIC_PREFIX.",
+      "Wagtail admin: /admin/iot/ — OTA at /admin/iot/ota/.",
+      "Extend: add schemas to ALLOWED_SCHEMAS; document in protocol.md; keep envelope validation in services in sync."
+    ]
+  }
+}

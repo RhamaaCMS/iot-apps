@@ -1,0 +1,52 @@
+{% extends "wagtailadmin/base.html" %}
+{% load i18n %}
+
+{% block titletag %}{{ title }}{% endblock %}
+
+{% block extra_css %}
+{% include "IoT/admin/_iot_styles.html" %}
+{% endblock %}
+
+{% block content %}
+<div class="iot-locus">
+  <div class="iot-hero w-mb-4">
+    <h1 class="w-h1 w-mt-0">{{ title }}</h1>
+    <p class="w-help" style="margin: 0.2rem 0 0">{% trans "Menentukan user Django mana yang punya akses ke organisasi (peran: admin, member, viewer)." %}</p>
+  </div>
+  {% include "IoT/admin/_iot_subnav.html" %}
+
+  <div class="iot-panel">
+    <div class="iot-panel__head">
+      <span>{% trans "Keanggotaan" %} ({{ row_count }})</span>
+      <a class="button button-primary" href="{{ snippets.organizationmembership.add }}">{% trans "Tambah anggota" %}</a>
+    </div>
+    <div class="iot-panel__body iot-table-wrap">
+      <table class="iot-table" aria-label="{% trans "Keanggotaan" %}">
+        <thead>
+          <tr>
+            <th scope="col">{% trans "Pengguna" %}</th>
+            <th scope="col">{% trans "Email" %}</th>
+            <th scope="col">{% trans "Organisasi" %}</th>
+            <th scope="col">{% trans "Peran" %}</th>
+            <th scope="col"><span class="w-sr-only">{% trans "Aksi" %}</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td><code class="iot-table__mono">{{ r.user }}</code></td>
+            <td>{{ r.email }}</td>
+            <td>{{ r.organization }} <span class="w-help">({{ r.org_slug }})</span></td>
+            <td>{{ r.role }}</td>
+            <td><a class="button button-small" href="{{ r.edit_href }}">{% trans "Ubah" %}</a></td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="5" class="w-help">{% trans "Belum ada keanggotaan." %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p style="margin:0.75rem 0 0;"><a class="iot-link-quiet" href="{{ snippets.organizationmembership.list }}">{% trans "Buka daftar penuh di Snippet" %}</a></p>
+    </div>
+  </div>
+</div>
+{% endblock %}

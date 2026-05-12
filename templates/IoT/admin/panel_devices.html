@@ -1,0 +1,361 @@
+{% extends "wagtailadmin/base.html" %}
+{% load i18n %}
+
+{% block titletag %}{{ title }}{% endblock %}
+
+{% block extra_css %}
+{% include "IoT/admin/_iot_styles.html" %}
+{% endblock %}
+
+{% block content %}
+<div class="iot-locus">
+  <div class="iot-hero w-mb-4">
+    <h1 class="w-h1 w-mt-0">{{ title }}</h1>
+    <p class="w-help" style="margin: 0.2rem 0 0">
+      {% trans "Log cocok prefix perangkat. Riwayat awal di API; pesan baru menyusul lewat saluran WebSocket yang sama dengan panel MQTT." %}
+    </p>
+    <p class="iot-mqtt-ws-pill" id="iot-mqtt-ws-pill" role="status" aria-live="polite">
+      <span class="status-dot no" id="iot-mqtt-ws-dot" aria-hidden="true"></span>
+      <span id="iot-mqtt-ws-txt">{% trans "Sambungan siaran…" %}</span>
+    </p>
+  </div>
+  {% include "IoT/admin/_iot_subnav.html" %}
+
+  <div class="iot-panel">
+    <div class="iot-panel__head">
+      <span>{% trans "Semua perangkat" %} ({{ row_count }})</span>
+      <a class="button button-primary" href="{{ snippets.device.add }}">{% trans "Tambah perangkat" %}</a>
+    </div>
+    <div class="iot-panel__body iot-table-wrap">
+      <table class="iot-table" aria-label="{% trans "Daftar perangkat" %}">
+        <thead>
+          <tr>
+            <th scope="col">{% trans "Online" %}</th>
+            <th scope="col">{% trans "Organisasi" %}</th>
+            <th scope="col">{% trans "Nama" %}</th>
+            <th scope="col">device_id</th>
+            <th scope="col">{% trans "OTA product" %}</th>
+            <th scope="col">{% trans "Aktif" %}</th>
+            <th scope="col">last_seen</th>
+            <th scope="col">channel</th>
+            <th scope="col">schema</th>
+            <th scope="col">MQTT</th>
+            <th scope="col"><span class="w-sr-only">{% trans "Aksi" %}</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td>
+              <span class="status-dot{% if r.online %} ok{% else %} no{% endif %}" aria-hidden="true"></span>
+              {% if r.online %}{% trans "on" %}{% else %}{% trans "off" %}{% endif %}
+            </td>
+            <td>{{ r.org_name }} <span class="w-help">({{ r.org_slug }})</span></td>
+            <td>{{ r.name }}</td>
+            <td><code class="iot-table__mono">{{ r.device_id }}</code></td>
+            <td><code class="iot-table__mono">{{ r.firmware_product }}</code></td>
+            <td>{% if r.is_active %}{% trans "Ya" %}{% else %}{% trans "Tidak" %}{% endif %}</td>
+            <td>{% if r.last_seen %}{{ r.last_seen|date:"Y-m-d H:i:s" }}{% else %}—{% endif %}</td>
+            <td>{{ r.last_channel }}</td>
+            <td>{{ r.last_schema }}</td>
+            <td>
+              <button type="button" class="button button-small iot-mqtt-toggle" data-iot-mqtt-pk="{{ r.pk }}" data-iot-mqtt-api="{% url 'iot:api_device_mqtt_messages' r.pk %}" aria-expanded="false" aria-controls="iot-mqtt-wrap-{{ r.pk }}">
+                {% trans "Lihat" %}
+              </button>
+            </td>
+            <td><a class="button button-small" href="{{ r.edit_href }}">{% trans "Ubah" %}</a></td>
+          </tr>
+          <tr
+            class="iot-mqtt-expand"
+            id="iot-mqtt-wrap-{{ r.pk }}"
+            hidden
+            data-iot-mqtt-pk="{{ r.pk }}"
+            data-iot-topic-prefix="{{ r.topic_filter_prefix|escape }}"
+          >
+            <td colspan="11">
+              <div class="iot-mqtt-box" id="iot-mqtt-panel-{{ r.pk }}">
+                <div class="iot-mqtt-hint" data-iot-mqtt-hint>
+                  {% trans "Buka log untuk memuat riwayat; siaran waktu-nyata menyambung jika tersedia (panel MQTT memakai hal yang sama)." %}
+                </div>
+                <div data-iot-mqtt-content>
+                  <p class="iot-mqtt-pref" data-iot-mqtt-prefix hidden></p>
+                  <div class="iot-mqtt-table-wrap" data-iot-mqtt-table></div>
+                </div>
+              </div>
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="10" class="w-help">{% trans "Belum ada perangkat." %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p style="margin:0.75rem 0 0;"><a class="iot-link-quiet" href="{{ snippets.device.list }}">{% trans "Buka daftar penuh di Snippet" %}</a></p>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+  "use strict";
+  var IOT_MQTT_LOAD_ERR = "{% filter escapejs %}{% trans "Gagal memuat log MQTT. Cek koneksi atau coba lagi." %}{% endfilter %}";
+  var T_DIR_IN = "{% trans "Terima" %}";
+  var T_DIR_OUT = "{% trans "Kirim" %}";
+  var T_COL_TIME = "{% trans "Waktu" %}";
+  var T_COL_DIR = "{% trans "Arah" %}";
+  var T_COL_TOPIC = "{% trans "Topik" %}";
+  var T_COL_PAYLOAD = "{% trans "Payload" %}";
+  var T_NO_MSG = "{% filter escapejs %}{% trans "Belum ada pesan MQTT tercatat untuk prefix ini. Pastikan broker menyimpan ke history dan topik memuat org + device_id." %}{% endfilter %}";
+  var T_FILTER = "{% filter escapejs %}{% trans "Filter topik" %}{% endfilter %}";
+  var T_ENTRI = "{% filter escapejs %}{% trans "entri" %}{% endfilter %}";
+  var T_WS_LIVE = "{% filter escapejs %}{% trans "Siaran MQTT terhubung — pesan baru tampil otomatis." %}{% endfilter %}";
+  var T_WS_DOWN = "{% filter escapejs %}{% trans "Siaran terputus, menyambung kembali…" %}{% endfilter %}";
+  var T_WS_BROKER_OFF = "{% filter escapejs %}{% trans "WebSocket terhubung; broker mungkin terputus (cek panel MQTT)." %}{% endfilter %}";
+  var labelLoading = "…";
+  var wsProto = location.protocol === "https:" ? "wss" : "ws";
+  var WS_URL = wsProto + "://" + location.host + "/ws/mqtt/dashboard/";
+  var iotMqttWs = null;
+  var iotMqttPing = null;
+
+  function fmtIso(iso) {
+    if (!iso) return "\u2014";
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso);
+    var pad = function (n) { return String(n).padStart(2, "0"); };
+    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + " " + d.toTimeString().slice(0, 8);
+  }
+
+  function setWsPill(connected) {
+    var dot = document.getElementById("iot-mqtt-ws-dot");
+    var txt = document.getElementById("iot-mqtt-ws-txt");
+    if (!dot || !txt) return;
+    if (connected) {
+      dot.className = "status-dot ok";
+      txt.textContent = T_WS_LIVE;
+    } else {
+      dot.className = "status-dot no";
+      txt.textContent = T_WS_DOWN;
+    }
+  }
+
+  function ensureMqttLiveWs() {
+    if (iotMqttWs && (iotMqttWs.readyState === WebSocket.OPEN || iotMqttWs.readyState === WebSocket.CONNECTING)) return;
+    iotMqttWs = new WebSocket(WS_URL);
+    iotMqttWs.onopen = function () { setWsPill(true); };
+    iotMqttWs.onmessage = function (e) {
+      var d;
+      try { d = JSON.parse(e.data); } catch (x) { return; }
+      if (d.type === "status" || d.type === "pong") {
+        if (d.broker_connected === false) {
+          var t0 = document.getElementById("iot-mqtt-ws-txt");
+          if (t0) t0.textContent = T_WS_BROKER_OFF;
+        }
+        return;
+      }
+      if (d.type === "subscriptions" || d.type === "reload_result" || d.type === "publish_ok" || d.type === "error")
+        return;
+      if (!d.direction || d.topic == null) return;
+      document.querySelectorAll("tr.iot-mqtt-expand:not([hidden])").forEach(function (row) {
+        var prefix = row.getAttribute("data-iot-topic-prefix");
+        if (!prefix || d.topic.length < prefix.length) return;
+        if (d.topic.indexOf(prefix) !== 0) return;
+        prependLiveMqttRow(row, d);
+      });
+    };
+    iotMqttWs.onclose = function () { setWsPill(false); clearInterval(iotMqttPing); setTimeout(ensureMqttLiveWs, 3000); };
+    if (iotMqttPing) clearInterval(iotMqttPing);
+    iotMqttPing = setInterval(function () {
+      if (iotMqttWs && iotMqttWs.readyState === WebSocket.OPEN)
+        iotMqttWs.send(JSON.stringify({ type: "ping" }));
+    }, 30000);
+  }
+
+  function stylePayload(raw, isOut) {
+    var t = (raw == null) ? "" : String(raw);
+    var el = document.createElement("div");
+    el.className = "iot-mqtt-payload" + (isOut ? " iot-mqtt-payload--out" : "");
+    var pretty = t;
+    try {
+      if (t.trim().charAt(0) === "{" || t.trim().charAt(0) === "[")
+        pretty = JSON.stringify(JSON.parse(t), null, 2);
+    } catch (e) {}
+    el.textContent = pretty;
+    return el;
+  }
+
+  function createMqttLogRow(m, isLive) {
+    var isOut = m.direction === "out" || m.direction === "O";
+    var at = m.received_at || m.ts;
+    var tr = document.createElement("tr");
+    if (isLive) tr.className = "iot-mqtt-row--live";
+    [fmtIso(at), null, String(m.qos), m.topic || "\u2014", null].forEach(function (cell, i) {
+      var td = document.createElement("td");
+      if (i === 1) {
+        var s = document.createElement("span");
+        s.className = "iot-mqtt-direction" + (isOut ? " iot-mqtt-direction--out" : " iot-mqtt-direction--in");
+        s.textContent = isOut ? T_DIR_OUT : T_DIR_IN;
+        td.appendChild(s);
+      } else if (i === 4) {
+        td.appendChild(stylePayload(m.payload, isOut));
+      } else {
+        td.appendChild(document.createTextNode(cell == null ? "" : cell));
+      }
+      tr.appendChild(td);
+    });
+    return tr;
+  }
+
+  function logTableThead() {
+    var tr = document.createElement("tr");
+    [T_COL_TIME, T_COL_DIR, "QoS", T_COL_TOPIC, T_COL_PAYLOAD].forEach(function (c) {
+      var th = document.createElement("th");
+      th.scope = "col";
+      th.textContent = c;
+      tr.appendChild(th);
+    });
+    return tr;
+  }
+
+  function prependLiveMqttRow(expandTr, d) {
+    var tableWrap = expandTr.querySelector("[data-iot-mqtt-table]");
+    if (!tableWrap) return;
+    var m = { received_at: d.ts, direction: d.direction, qos: d.qos, topic: d.topic, payload: d.payload };
+    var tr = createMqttLogRow(m, true);
+    var first = tableWrap.firstElementChild;
+    if (!first || first.tagName === "P") {
+      tableWrap.innerHTML = "";
+      var tbl = document.createElement("table");
+      tbl.className = "iot-mqtt-logtable";
+      tbl.setAttribute("role", "table");
+      var thead = document.createElement("thead");
+      thead.appendChild(logTableThead());
+      var tbody = document.createElement("tbody");
+      tbody.appendChild(tr);
+      tbl.appendChild(thead);
+      tbl.appendChild(tbody);
+      tableWrap.appendChild(tbl);
+    } else {
+      var tbody = first.querySelector("tbody");
+      if (!tbody) return;
+      tbody.insertBefore(tr, tbody.firstChild);
+      while (tbody.children.length > 100) tbody.removeChild(tbody.lastChild);
+    }
+    var cnt = expandTr.querySelector("[data-iot-msg-count]");
+    if (cnt) {
+      var n = parseInt(cnt.textContent, 10);
+      if (!isNaN(n)) cnt.textContent = String(n + 1);
+    }
+  }
+
+  function buildTable(messages) {
+    if (!messages || !messages.length) {
+      var p = document.createElement("p");
+      p.className = "w-help";
+      p.style.margin = "0";
+      p.textContent = T_NO_MSG;
+      return p;
+    }
+    var tbl = document.createElement("table");
+    tbl.className = "iot-mqtt-logtable";
+    tbl.setAttribute("role", "table");
+    var head = logTableThead();
+    var thead = document.createElement("thead");
+    thead.appendChild(head);
+    tbl.appendChild(thead);
+    var body = document.createElement("tbody");
+    messages.forEach(function (m) { body.appendChild(createMqttLogRow(m, false)); });
+    tbl.appendChild(body);
+    return tbl;
+  }
+
+  ensureMqttLiveWs();
+
+  document.querySelectorAll(".iot-mqtt-toggle").forEach(function (btn) {
+    var pk = btn.getAttribute("data-iot-mqtt-pk");
+    var wrap = document.getElementById("iot-mqtt-wrap-" + pk);
+    var panel = document.getElementById("iot-mqtt-panel-" + pk);
+    if (!wrap || !panel) return;
+    var content = panel.querySelector("[data-iot-mqtt-content]");
+    var hint = panel.querySelector("[data-iot-mqtt-hint]");
+    var tableWrap = panel.querySelector("[data-iot-mqtt-table]");
+    var prefixEl = panel.querySelector("[data-iot-mqtt-prefix]");
+    var url = btn.getAttribute("data-iot-mqtt-api");
+    var loaded = false;
+    var loadedData = null;
+    var loading = false;
+    var labelOpen = "{% trans "Tutup" %}";
+    var labelClosed = "{% trans "Lihat" %}";
+
+    function setLoading(on) {
+      if (!content) return;
+      if (on) { content.classList.add("is-loading"); content.classList.remove("is-error"); }
+      else { content.classList.remove("is-loading"); }
+    }
+    function showError(msg) {
+      setLoading(false);
+      if (content) { content.classList.add("is-error"); }
+      if (tableWrap) { tableWrap.innerHTML = ""; }
+      if (prefixEl) { prefixEl.removeAttribute("hidden"); prefixEl.textContent = String(msg); }
+    }
+    function render(data) {
+      setLoading(false);
+      if (hint) { hint.setAttribute("hidden", ""); }
+      if (content) { content.classList.remove("is-error"); }
+      if (prefixEl) {
+        prefixEl.removeAttribute("hidden");
+        prefixEl.innerHTML = "";
+        var strong = document.createElement("strong");
+        strong.textContent = T_FILTER;
+        prefixEl.appendChild(strong);
+        prefixEl.appendChild(document.createTextNode(" "));
+        var c = document.createElement("code");
+        c.textContent = data.prefix || "\u2014";
+        prefixEl.appendChild(c);
+        prefixEl.appendChild(document.createTextNode(" \u2014 "));
+        var sCnt = document.createElement("span");
+        sCnt.setAttribute("data-iot-msg-count", "");
+        sCnt.textContent = String(data.count != null ? data.count : 0);
+        prefixEl.appendChild(sCnt);
+        prefixEl.appendChild(document.createTextNode(" " + T_ENTRI));
+      }
+      if (tableWrap) {
+        tableWrap.innerHTML = "";
+        tableWrap.appendChild(buildTable(data.messages));
+      }
+    }
+    function load() {
+      if (loading) return;
+      if (loaded) { render(loadedData); return; }
+      loading = true;
+      setLoading(true);
+      if (tableWrap) { tableWrap.innerHTML = ""; }
+      if (prefixEl) { prefixEl.removeAttribute("hidden"); prefixEl.textContent = labelLoading; }
+      var fullUrl = url + (url.indexOf("?") >= 0 ? "&" : "?") + "limit=50";
+      fetch(fullUrl, { headers: { "Accept": "application/json" } })
+        .then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.json();
+        })
+        .then(function (d) { loaded = true; loadedData = d; render(d); loading = false; })
+        .catch(function () { showError(IOT_MQTT_LOAD_ERR); loading = false; });
+    }
+
+    btn.addEventListener("click", function () {
+      var isPanelVisible = !wrap.hasAttribute("hidden");
+      if (isPanelVisible) {
+        wrap.setAttribute("hidden", "");
+        btn.setAttribute("aria-expanded", "false");
+        btn.textContent = labelClosed;
+        return;
+      }
+      ensureMqttLiveWs();
+      wrap.removeAttribute("hidden");
+      btn.setAttribute("aria-expanded", "true");
+      btn.textContent = labelOpen;
+      load();
+    });
+  });
+})();
+</script>
+{% endblock %}

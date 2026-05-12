@@ -1,0 +1,134 @@
+{% extends "wagtailadmin/base.html" %}
+{% load i18n %}
+
+{% block titletag %}{{ title }}{% endblock %}
+
+{% block extra_css %}
+{% include "IoT/admin/_iot_styles.html" %}
+{% endblock %}
+
+{% block content %}
+<div class="iot-locus">
+  <div class="iot-hero w-mb-4">
+    <h1 class="w-h1 w-mt-0">{{ title }}</h1>
+    <p class="w-help" style="margin: 0.2rem 0 0">
+      {% trans "Buat job OTA, lalu terbitkan ke perangkat lewat topik downlink MQTT. Unduhan firmware memakai URL publik yang ditandatangani (query t)." %}
+    </p>
+    <p class="w-help" style="margin: 0.35rem 0 0">
+      <strong>{% trans "OTA public base" %}:</strong> <code>{{ ota_public_base }}</code>
+      <span class="w-help"> — {% trans "Set IOT_OTA_PUBLIC_BASE in production if devices use another host than Site." %}</span>
+    </p>
+  </div>
+  {% include "IoT/admin/_iot_subnav.html" %}
+
+  {% if messages %}
+  <ul class="messages" style="list-style: none; padding: 0; margin: 0 0 1rem 0">
+    {% for message in messages %}
+    <li class="{% if message.tags %}{{ message.tags }}{% endif %}" style="padding: 0.5rem 0.75rem; background: #f0f0f0; border-radius: 4px; margin-bottom: 0.35rem">{{ message }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  <div class="iot-panel w-mb-3">
+    <div class="iot-panel__head">
+      <span>{% trans "Firmware" %}</span>
+      <a class="button button-small" href="{{ snips.list|default:'#' }}">{% trans "Snippet: firmware" %}</a>
+    </div>
+    <div class="iot-panel__body">
+      <p class="w-help" style="margin: 0">{% trans "Upload a binary, then create a job below for a target device." %}</p>
+    </div>
+  </div>
+
+  <div class="iot-panel w-mb-3">
+    <div class="iot-panel__head">
+      <span>{% trans "Buat job OTA" %}</span>
+    </div>
+    <div class="iot-panel__body">
+      <form method="post" action="{% url 'iot:panel_ota' %}">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="create" />
+        <p>
+          <label for="id_device_pk" style="display:block; font-weight: 600; margin-bottom: 0.25rem">{% trans "Perangkat" %}</label>
+          <select name="device_pk" id="id_device_pk" required class="w-field__input" style="max-width: 48rem; width: 100%">
+            <option value="">—</option>
+            {% for o in device_options %}
+            <option value="{{ o.pk }}">{{ o.label }}</option>
+            {% endfor %}
+          </select>
+        </p>
+        <p>
+          <label for="id_firmware_pk" style="display:block; font-weight: 600; margin-bottom: 0.25rem">{% trans "Firmware" %}</label>
+          <select name="firmware_pk" id="id_firmware_pk" required class="w-field__input" style="max-width: 48rem; width: 100%">
+            <option value="">—</option>
+            {% for o in firmware_options %}
+            <option value="{{ o.pk }}">{{ o.label }}</option>
+            {% endfor %}
+          </select>
+        </p>
+      <p class="w-help" style="margin: 0.75rem 0 0">
+        {% trans "Firmware product must match the device field firmware_product (Snippet → Device). Creating a new job cancels other pending/sent/in-progress jobs for that device." %}
+      </p>
+    </div>
+  </div>
+
+  <div class="iot-panel">
+    <div class="iot-panel__head">
+      <span>{% trans "Job OTA" %} ({{ job_rows|length }})</span>
+      <a class="button button-small" href="{{ job_snip.list|default:'#' }}">{% trans "Snippet: jobs" %}</a>
+    </div>
+    <div class="iot-panel__body iot-table-wrap">
+      <table class="iot-table" aria-label="{% trans "Daftar job OTA" %}">
+        <thead>
+          <tr>
+            <th scope="col">job_id</th>
+            <th scope="col">{% trans "Perangkat" %}</th>
+            <th scope="col">{% trans "Produk" %}</th>
+            <th scope="col">{% trans "Organisasi" %}</th>
+            <th scope="col">{% trans "Downlink topic" %}</th>
+            <th scope="col">{% trans "Firmware" %}</th>
+            <th scope="col">{% trans "Status" %}</th>
+            <th scope="col">{% trans "Dibuat" %}</th>
+            <th scope="col"><span class="w-sr-only">{% trans "Aksi" %}</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in job_rows %}
+          <tr>
+            <td><code class="iot-table__mono" style="font-size:0.8rem">{{ r.job_id }}</code></td>
+            <td>{{ r.device_name }}</td>
+            <td><code class="iot-table__mono">{{ r.device_product }}</code></td>
+            <td><code class="iot-table__mono">{{ r.org_slug }}</code></td>
+            <td><code class="iot-table__mono" style="font-size:0.7rem; word-break:break-all">{{ r.downlink_topic }}</code></td>
+            <td>{{ r.firmware }}</td>
+            <td>{{ r.status }}</td>
+            <td>{{ r.created|date:"Y-m-d H:i:s" }}</td>
+            <td style="white-space: nowrap">
+              <a class="button button-small" href="{{ r.edit_href }}">{% trans "Ubah" %}</a>
+              {% if r.status_key == "pending" %}
+              <form method="post" action="{% url 'iot:panel_ota' %}" style="display: inline; margin: 0">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="publish" />
+                <input type="hidden" name="job_id" value="{{ r.job_id }}" />
+                <button type="submit" class="button button-primary button-small">{% trans "Terbitkan" %}</button>
+              </form>
+              {% elif r.status_key == "sent" %}
+              <form method="post" action="{% url 'iot:panel_ota' %}" style="display: inline; margin: 0">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="republish" />
+                <input type="hidden" name="job_id" value="{{ r.job_id }}" />
+                <button type="submit" class="button button-small">{% trans "Kirim ulang" %}</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+          {% empty %}
+          <tr>
+            <td colspan="9" class="w-help">{% trans "Belum ada job." %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
