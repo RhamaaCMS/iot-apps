@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import timedelta
 from uuid import UUID
 
-from asgiref.sync import async_to_sync
+import asyncio
+
+from asgiref.sync import async_to_sync, sync_to_async
 from django.db import transaction
 from django.utils import timezone
 
@@ -114,6 +116,68 @@ def dispatch_one() -> bool:
         message.save(update_fields=("status", "sent_at", "locked_at", "last_error"))
         _apply_delivery_result(message)
     return True
+
+
+async def dispatch_one_async() -> bool:
+    """Async dispatcher used by the dedicated base-iot MQTT worker."""
+    from apps.mqtt.client import mqtt_client
+
+    if not mqtt_client.is_connected:
+        return False
+    message = await sync_to_async(_claim_next, thread_sensitive=True)()
+    if not message:
+        return False
+    try:
+        await mqtt_client.publish(
+            message.topic,
+            message.payload,
+            qos=message.qos,
+            retain=message.retain,
+        )
+    except Exception as exc:
+        await sync_to_async(_mark_failed, thread_sensitive=True)(message, exc)
+        return True
+    await sync_to_async(_mark_sent, thread_sensitive=True)(message)
+    return True
+
+
+def _mark_failed(message: MQTTOutboxMessage, exc: Exception) -> None:
+    message.status = OutboxStatus.FAILED
+    message.last_error = str(exc)[:4000]
+    message.locked_at = None
+    message.available_at = timezone.now() + timedelta(
+        seconds=min(300, 2 ** min(message.attempts, 8))
+    )
+    message.save(update_fields=("status", "last_error", "locked_at", "available_at"))
+
+
+def _mark_sent(message: MQTTOutboxMessage) -> None:
+    with transaction.atomic():
+        message.status = OutboxStatus.SENT
+        message.sent_at = timezone.now()
+        message.locked_at = None
+        message.last_error = ""
+        message.save(update_fields=("status", "sent_at", "locked_at", "last_error"))
+        _apply_delivery_result(message)
+
+
+async def run_outbox_loop() -> None:
+    """Worker extension: continuously drain durable IoT downlinks."""
+    loop = asyncio.get_running_loop()
+    next_recovery = 0.0
+    while True:
+        from apps.mqtt.client import mqtt_client
+
+        if loop.time() >= next_recovery:
+            await sync_to_async(recover_stale, thread_sensitive=True)()
+            next_recovery = loop.time() + 60
+
+        if not mqtt_client.is_connected:
+            await mqtt_client.wait_until_connected(timeout=5)
+            continue
+        processed = await dispatch_one_async()
+        if not processed:
+            await asyncio.sleep(0.5)
 
 
 def recover_stale(*, older_than: timedelta = timedelta(minutes=5)) -> int:

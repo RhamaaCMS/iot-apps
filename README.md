@@ -2,6 +2,14 @@
 
 Multi-tenant connected-device domain for RhamaaCMS `base-iot`. MQTT runtime stays in `apps.mqtt`; this app owns profiles, provisioning, fleet identity, canonical telemetry ingest, state shadow, command lifecycle, audit events, and OTA.
 
+Install from a project generated with RhamaaCMS `base-iot`:
+
+```bash
+rhamaa cms startapp IoT --prebuild iot
+```
+
+CLI adds `apps.IoT`, public/provisioning URLs, `/ota/firmware/`, environment defaults, and applies migration label `iot`.
+
 ## Connected Device MVP
 
 - `DeviceProfile`: per-tenant product/protocol contract and schema allowlist.
@@ -25,7 +33,7 @@ python manage.py iot_create_provisioning_token --org acme --profile sensor --ttl
 
 Schedule `python manage.py iot_expire_commands` periodically to close expired commands.
 
-Run `python manage.py iot_dispatch_outbox --limit 100` continuously or on a short schedule. HTTP/admin requests only enqueue MQTT downlinks; dispatcher performs broker I/O and retry.
+Run `python manage.py mqtt_worker` as dedicated base-iot process. `Apps/IoT` registers its outbox loop automatically through MQTT worker extension registry.
 
 > **Note:** Python package is `apps.IoT` (capital `IoT`) — use exactly that in `INSTALLED_APPS` and imports.
 
@@ -35,7 +43,7 @@ Run `python manage.py iot_dispatch_outbox --limit 100` continuously or on a shor
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  MQTT Broker (e.g., broker.emqx.io)                         │
+│  MQTT Broker (project-managed, e.g. localhost)              │
 │  ─ Topics: iot/v1/{org}/{device}/up/telemetry               │
 │  ─ Downlink: iot/v1/{org}/{device}/down/ota                 │
 └──────────────────────┬──────────────────────────────────────┘
@@ -96,6 +104,7 @@ apps/IoT/
 ├── admin_urls.py            # Routes for admin_views (namespace: iot)
 ├── admin_snippet_urls.py    # Reverse Wagtail snippet URLs for templates
 ├── ota_public_views.py      # Signed OTA firmware download (public, no auth)
+├── ota_urls.py              # CLI-mounted /ota/firmware/ route
 ├── views.py                 # Public placeholder view
 ├── urls.py                  # Public URL patterns (app_name='IoT')
 ├── wagtail_hooks.py         # Submenu "IoT" + /admin/iot/ URL registration
@@ -112,7 +121,7 @@ apps/IoT/
 ### 1. Environment variables
 
 ```env
-MQTT_BROKER_HOST=broker.emqx.io
+MQTT_BROKER_HOST=localhost
 MQTT_BROKER_PORT=1883
 IOT_OTA_PUBLIC_BASE=https://api.example.com   # Optional; public origin for OTA download URLs
 ```
@@ -512,16 +521,7 @@ GET /ota/firmware/?t=<signed-token>
 - Job must be in `pending`, `sent`, or `in_progress` status
 - Returns firmware binary as `FileResponse` with `Content-Disposition: attachment`
 
-**Important:** Register this route at the **project level** (`solar_monitoring_apps/urls.py`), not in the app’s `urls.py`:
-
-```python
-from apps.IoT.ota_public_views import ota_public_download
-
-urlpatterns = [
-    path("ota/firmware/", ota_public_download),
-    # ... other routes
-]
-```
+RhamaaCLI registers this project-level route through `apps.IoT.ota_urls` during installation.
 
 ---
 
