@@ -20,22 +20,31 @@ from .constants import (
     ONLINE_THRESHOLD_MINUTES,
 )
 from .models import Device, DeviceOTAJob, FirmwareVersion, Organization, OrganizationMembership
+from .access import (
+    manageable_organization_ids_for_user,
+    scope_devices,
+    scope_manageable_devices,
+    scope_manageable_ota_jobs,
+    scope_memberships,
+    scope_organizations,
+    scope_ota_jobs,
+)
 
 # Backward compatibility alias
 FirmwarePackage = FirmwareVersion
 
 
-def _base_iot_context(active_section: str) -> dict:
+def _base_iot_context(active_section: str, user=None) -> dict:
     return {
         "iot_active_section": active_section,
-        "snippets": all_snippet_links(),
+        "snippets": all_snippet_links(user),
     }
 
 
 @require_admin_access
 def dashboard(request):
-    org_count = Organization.objects.filter(is_active=True).count()
-    dev_qs = Device.objects.select_related("organization")
+    org_count = scope_organizations(Organization.objects.filter(is_active=True), request.user).count()
+    dev_qs = scope_devices(Device.objects.select_related("organization"), request.user)
     dev_count = dev_qs.count()
     online = sum(1 for d in dev_qs if services.device_is_online(d))
     devices = []
@@ -71,7 +80,7 @@ def dashboard(request):
             "allowed_schemas": list(ALLOWED_SCHEMAS),
             "example_telemetry_topic": f"{IOT_MQTT_TOPIC_PREFIX}/kirei/550e8400-e29b-41d4-a716-446655440000/up/telemetry",
             "now_iso": timezone.now().astimezone(UTC).isoformat().replace("+00:00", "Z"),
-            **_base_iot_context("summary"),
+            **_base_iot_context("summary", request.user),
         },
     )
 
@@ -79,7 +88,7 @@ def dashboard(request):
 @require_admin_access
 def panel_organizations(request):
     orgs = (
-        Organization.objects.annotate(_num_devices=Count("devices", distinct=True))
+        scope_organizations(Organization.objects.all(), request.user).annotate(_num_devices=Count("devices", distinct=True))
         .order_by("name")
     )
     rows = []
@@ -91,7 +100,7 @@ def panel_organizations(request):
                 "slug": o.slug,
                 "is_active": o.is_active,
                 "num_devices": o._num_devices,
-                "edit_href": snippet_edit_url("organization", o.pk),
+                "edit_href": snippet_edit_url("organization", o.pk) if request.user.is_superuser else None,
             }
         )
     return TemplateResponse(
@@ -101,16 +110,16 @@ def panel_organizations(request):
             "title": "Organisasi — IoT",
             "rows": rows,
             "row_count": len(rows),
-            **_base_iot_context("organizations"),
+            **_base_iot_context("organizations", request.user),
         },
     )
 
 
 @require_admin_access
 def panel_memberships(request):
-    q = OrganizationMembership.objects.select_related(
+    q = scope_memberships(OrganizationMembership.objects.select_related(
         "user", "organization"
-    ).order_by("organization__name", "user__email")
+    ), request.user).order_by("organization__name", "user__email")
     rows = []
     for m in q:
         rows.append(
@@ -121,7 +130,7 @@ def panel_memberships(request):
                 "organization": m.organization.name,
                 "org_slug": m.organization.slug,
                 "role": m.get_role_display(),
-                "edit_href": snippet_edit_url("organizationmembership", m.pk),
+                "edit_href": snippet_edit_url("organizationmembership", m.pk) if request.user.is_superuser else None,
             }
         )
     return TemplateResponse(
@@ -131,14 +140,14 @@ def panel_memberships(request):
             "title": "Pengguna & organisasi — IoT",
             "rows": rows,
             "row_count": len(rows),
-            **_base_iot_context("memberships"),
+            **_base_iot_context("memberships", request.user),
         },
     )
 
 
 @require_admin_access
 def panel_devices(request):
-    dev_qs = Device.objects.select_related("organization").order_by(
+    dev_qs = scope_devices(Device.objects.select_related("organization"), request.user).order_by(
         "organization__name", "name"
     )
     rows = []
@@ -156,7 +165,7 @@ def panel_devices(request):
                 "last_seen": d.last_seen_at,
                 "last_channel": d.last_channel or "—",
                 "last_schema": d.last_schema or "—",
-                "edit_href": snippet_edit_url("device", d.pk),
+                "edit_href": snippet_edit_url("device", d.pk) if request.user.is_superuser else None,
                 "topic_filter_prefix": services.device_mqtt_message_topic_prefix(d),
             }
         )
@@ -168,7 +177,7 @@ def panel_devices(request):
             "rows": rows,
             "row_count": len(rows),
             "online_threshold_minutes": ONLINE_THRESHOLD_MINUTES,
-            **_base_iot_context("devices"),
+            **_base_iot_context("devices", request.user),
         },
     )
 
@@ -188,7 +197,7 @@ def panel_ota(request):
             except (TypeError, ValueError):
                 dev_pk, fw_pk = 0, 0
             device = get_object_or_404(
-                Device.objects.select_related("organization"), pk=dev_pk
+                scope_manageable_devices(Device.objects.select_related("organization"), request.user), pk=dev_pk
             )
             firmware = get_object_or_404(FirmwarePackage, pk=fw_pk)
             try:
@@ -211,7 +220,7 @@ def panel_ota(request):
                 messages.error(request, "Invalid job_id.")
                 return redirect("iot:panel_ota")
             job = get_object_or_404(
-                DeviceOTAJob.objects.select_related("device", "firmware", "device__organization"),
+                scope_manageable_ota_jobs(DeviceOTAJob.objects.select_related("device", "firmware", "device__organization"), request.user),
                 job_id=ju,
             )
             try:
@@ -222,7 +231,7 @@ def panel_ota(request):
             else:
                 messages.success(
                     request,
-                    f"OTA command published for job {job.job_id}.",
+                    f"OTA command queued for job {job.job_id}.",
                 )
             return redirect("iot:panel_ota")
 
@@ -234,7 +243,7 @@ def panel_ota(request):
                 messages.error(request, "Invalid job_id.")
                 return redirect("iot:panel_ota")
             job = get_object_or_404(
-                DeviceOTAJob.objects.select_related("device", "firmware", "device__organization"),
+                scope_manageable_ota_jobs(DeviceOTAJob.objects.select_related("device", "firmware", "device__organization"), request.user),
                 job_id=ju,
             )
             try:
@@ -245,14 +254,16 @@ def panel_ota(request):
             else:
                 messages.success(
                     request,
-                    f"OTA command re-sent for job {job.job_id} (new signed URL).",
+                    f"OTA command requeued for job {job.job_id} (new signed URL).",
                 )
             return redirect("iot:panel_ota")
 
     jobs = (
-        DeviceOTAJob.objects.select_related("device", "device__organization", "firmware")
+        scope_ota_jobs(DeviceOTAJob.objects.select_related("device", "device__organization", "firmware"), request.user)
         .order_by("-created_at")[:80]
     )
+    manageable_ids = manageable_organization_ids_for_user(request.user)
+    manageable_ids = None if manageable_ids is None else set(manageable_ids)
     job_rows = []
     for j in jobs:
         slug = j.device.organization.slug
@@ -267,8 +278,9 @@ def panel_ota(request):
                 "status": j.get_status_display(),
                 "status_key": j.status,
                 "created": j.created_at,
-                "edit_href": snippet_edit_url("deviceotajob", j.pk),
+                "edit_href": snippet_edit_url("deviceotajob", j.pk) if request.user.is_superuser else None,
                 "downlink_topic": f"{IOT_MQTT_TOPIC_PREFIX}/{slug}/{did}/down/ota",
+                "can_manage": manageable_ids is None or j.device.organization_id in manageable_ids,
             }
         )
 
@@ -277,7 +289,7 @@ def panel_ota(request):
             "pk": d.pk,
             "label": f"{d.organization.slug} / {d.name} [product={d.firmware_product}] ({d.device_id})",
         }
-        for d in Device.objects.select_related("organization").order_by(
+        for d in scope_manageable_devices(Device.objects.select_related("organization"), request.user).order_by(
             "organization__name", "name"
         )[:2000]
     ]
@@ -299,9 +311,9 @@ def panel_ota(request):
             "device_options": dev_opts,
             "firmware_options": fw_opts,
             "ota_public_base": ota_base,
-            "snips": all_snippet_links().get("firmwarepackage", {}),
-            "job_snip": all_snippet_links().get("deviceotajob", {}),
-            **_base_iot_context("ota"),
+            "snips": all_snippet_links(request.user).get("firmwareversion", {}),
+            "job_snip": all_snippet_links(request.user).get("deviceotajob", {}),
+            **_base_iot_context("ota", request.user),
         },
     )
 
@@ -327,7 +339,7 @@ def api_device_mqtt_messages(request, device_pk: int):
     except (TypeError, ValueError):
         limit = 50
     d = get_object_or_404(
-        Device.objects.select_related("organization"), pk=device_pk
+        scope_devices(Device.objects.select_related("organization"), request.user), pk=device_pk
     )
     prefix, messages = services.recent_mqtt_messages_for_device(d, limit=limit)
     return JsonResponse(
@@ -346,7 +358,7 @@ def api_device_mqtt_messages(request, device_pk: int):
 @require_GET
 def api_devices_summary(request):
     data = []
-    for d in Device.objects.select_related("organization").all()[:500]:
+    for d in scope_devices(Device.objects.select_related("organization"), request.user).all()[:500]:
         data.append(
             {
                 "id": str(d.device_id),

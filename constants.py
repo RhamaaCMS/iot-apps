@@ -12,14 +12,14 @@ ENVELOPE_VERSION = 1
 # Devices with last_seen within this window are shown as "online" in the admin dashboard
 ONLINE_THRESHOLD_MINUTES = 5
 
-# If non-empty, incoming messages must use one of these schema strings in the envelope
-ALLOWED_SCHEMAS = frozenset(
-    {
-        "solar_telemetry.v1",
-        "heartbeat.v1",
-        "ota_status.v1",
-    }
-)
+# Optional platform-wide allowlist. DeviceProfile.allowed_schemas is preferred.
+# Empty keeps the reusable base generic while profiles may enforce contracts.
+ALLOWED_SCHEMAS = frozenset()
+
+STATE_SCHEMA_REPORTED = "device_state.v1"
+STATE_SCHEMA_DESIRED = "device_state_desired.v1"
+COMMAND_SCHEMA_REQUEST = "command_request.v1"
+COMMAND_SCHEMA_STATUS = "command_status.v1"
 
 # OTA (downlink uses same envelope; not validated against ALLOWED_SCHEMAS on publish)
 OTA_CHANNEL = "ota"

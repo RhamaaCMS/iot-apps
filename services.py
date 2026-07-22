@@ -12,7 +12,8 @@ from datetime import datetime
 from typing import Any, Optional, cast
 from uuid import UUID
 
-from django.core.exceptions import ObjectDoesNotExist
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.db import IntegrityError, transaction
 from django.utils import dateparse, timezone
 
 from .constants import (
@@ -21,9 +22,11 @@ from .constants import (
     IOT_MQTT_TOPIC_PREFIX,
     ONLINE_THRESHOLD_MINUTES,
     OTA_SCHEMA_STATUS,
+    COMMAND_SCHEMA_STATUS,
+    STATE_SCHEMA_REPORTED,
     ProtocolSpec,
 )
-from .signals import device_uplink_ingested
+from .signals import device_uplink_ingested, telemetry_recorded
 
 logger = logging.getLogger(__name__)
 
@@ -207,17 +210,59 @@ def process_incoming_mqtt_message(topic: str, payload: str) -> str:
     if tinfo["org_slug"] != d.organization.slug or tinfo["device_id"] != str(d.device_id):
         return "error: topic vs database mismatch"
 
-    ch = env.get("channel", "").lower()
-    if ch == "ota" and str(env.get("schema") or "") == OTA_SCHEMA_STATUS:
-        from . import ota_services
-
-        ota_services.apply_ota_status_uplink(d, env)
+    profile = d.profile
+    if profile and (
+        not profile.is_active
+        or (profile.allowed_schemas and env["schema"] not in profile.allowed_schemas)
+    ):
+        return "error: schema not allowed by device profile"
 
     p_ts = cast(datetime | None, env.get("_parsed_ts"))
-    d.last_seen_at = p_ts or timezone.now()
-    d.last_channel = env.get("channel", "")[:100]
-    d.last_schema = env.get("schema", "")[:200]
-    d.save(update_fields=["last_seen_at", "last_channel", "last_schema"])
+    received_at = timezone.now()
+    from .models import DeviceEvent, TelemetryRecord
+
+    try:
+        with transaction.atomic():
+            record = TelemetryRecord.objects.create(
+                device=d,
+                message_id=(env.get("msg_id") or None),
+                channel=env.get("channel", "")[:100],
+                schema=env.get("schema", "")[:200],
+                payload=env.get("data", {}),
+                device_timestamp=p_ts,
+                received_at=received_at,
+            )
+            d.last_seen_at = received_at
+            d.last_device_timestamp = p_ts
+            d.last_channel = env.get("channel", "")[:100]
+            d.last_schema = env.get("schema", "")[:200]
+            d.save(update_fields=["last_seen_at", "last_device_timestamp", "last_channel", "last_schema"])
+            DeviceEvent.objects.create(
+                organization=d.organization,
+                device=d,
+                event_type="uplink.ingested",
+                data={"schema": record.schema, "channel": record.channel, "message_id": record.message_id},
+            )
+            ch = env.get("channel", "").lower()
+            schema = str(env.get("schema") or "")
+            if ch == "ota" and schema == OTA_SCHEMA_STATUS:
+                from . import ota_services
+
+                ota_services.apply_ota_status_uplink(d, env)
+            if schema == STATE_SCHEMA_REPORTED:
+                from .device_services import apply_reported_state
+
+                apply_reported_state(d, env)
+            if schema == COMMAND_SCHEMA_STATUS:
+                from .device_services import apply_command_status
+
+                apply_command_status(d, env)
+    except IntegrityError:
+        return "skip: duplicate msg_id"
+    except ValidationError as exc:
+        return f"error: {exc.messages[0] if exc.messages else exc}"
+
+    telemetry_recorded.send(sender=TelemetryRecord, device=d, record=record, envelope=env)
     device_uplink_ingested.send(
         sender=d.__class__, device=d, envelope=env, topic=tnorm
     )

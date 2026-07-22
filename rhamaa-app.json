@@ -2,8 +2,8 @@
   "schema_version": "1.0.0",
   "name": "IoT",
   "slug": "iot",
-  "version": "1.1.0",
-  "description": "Multi-tenant MQTT device registry (Organization, Device, memberships) with strict JSON envelope handling, Wagtail admin dashboards, and OTA firmware delivery (signed HTTPS download + MQTT ota_command.v1 / ota_status.v1). Integrates with the project mqtt bridge (apps.mqtt) for publish/subscribe.",
+  "version": "2.1.0",
+  "description": "Connected-device domain: profiles, provisioning, credentials, idempotent telemetry, state shadow, commands, audit events, and OTA. Uses base-iot apps.mqtt as transport runtime.",
   "author": "RhamaaCMS",
 
   "notes": {
@@ -26,6 +26,10 @@
       "IOT_OTA_PUBLIC_BASE": {
         "default": null,
         "note": "Optional. Public origin for OTA download URLs in MQTT (no trailing slash), e.g. https://api.example.com. If unset, ota_services.get_ota_public_base_url() uses django.contrib.sites Site, else DEBUG http://127.0.0.1:8000. Devices must reach this host over HTTPS in production."
+      },
+      "IOT_PROVISION_RATE_LIMIT": {
+        "default": 10,
+        "note": "Maximum provisioning attempts per client IP per minute."
       }
     }
   },
@@ -37,6 +41,12 @@
       "namespace": "IoT",
       "name": "Public index + future public pages",
       "note": "Mounted in project solar_monitoring_apps/urls.py. Currently a small index; device admin lives in Wagtail."
+    },
+    {
+      "path": "IoT/api/v1/provision/",
+      "name": "IoT:provision",
+      "view": "apps.IoT.views.provision",
+      "note": "Bootstrap-token exchange; returns plaintext device credential once."
     },
     {
       "path": "admin/iot/",
@@ -87,8 +97,12 @@
 
   "files": {
     "constants.py": "ENVELOPE_VERSION, IOT_MQTT_TOPIC_PREFIX, ALLOWED_SCHEMAS, OTA constants.",
-    "models.py": "Organization, OrganizationMembership, Device, FirmwarePackage, DeviceOTAJob; register_snippet on all tenant/firmware types.",
-    "services.py": "parse_iot_uplink_topic, validate_envelope, process_incoming_mqtt_message; dispatches ota_status.v1 to ota_services.apply_ota_status_uplink.",
+    "models.py": "IoT domain persistence including durable MQTTOutboxMessage. Wagtail registration is separate.",
+    "services.py": "Envelope validation and idempotent canonical ingest with separate server/device timestamps.",
+    "device_services.py": "Provisioning, credentials, state shadow, and command lifecycle.",
+    "access.py": "Membership-based tenant queryset scoping for IoT admin and APIs.",
+    "snippet_viewsets.py": "Superuser-only raw Wagtail snippet CRUD and chooser surfaces.",
+    "integrations/mqtt.py": "Transactional MQTT outbox enqueue, retry, stale-lock recovery, and delivery callbacks.",
     "ota_services.py": "create_ota_job, build_ota_command_json, publish_ota_command, apply_ota_status_uplink, get_ota_public_base_url.",
     "ota_public_views.py": "ota_public_download — signed token (django.core.signing) with OTA_DOWNLOAD_SALT.",
     "admin_views.py": "Wagtail panels: dashboard, organizations, memberships, devices, OTA (create job + publish).",
@@ -124,13 +138,18 @@
   "post_install": {
     "migrations": true,
     "fixtures": [],
-    "management_commands": [],
+    "management_commands": [
+      "iot_create_provisioning_token",
+      "iot_expire_commands",
+      "iot_dispatch_outbox",
+      "firmware_cleanup"
+    ],
     "messages": [
       "Ensure 'apps.IoT' and 'apps.mqtt' are in INSTALLED_APPS; run migrations for app label 'iot' (e.g. python manage.py migrate iot).",
       "If OTA is used, register path('ota/firmware/', ota_public_download) in the project urlconf and set IOT_OTA_PUBLIC_BASE in .env in production if Site domain ≠ device-reachable host.",
       "Point MQTT consumer at process_incoming_mqtt_message; subscribe to cover iot/v1/{org}/{device_id}/up/# and downlink publisher must use the same topic prefix (iot/v1) as constants.IOT_MQTT_TOPIC_PREFIX.",
       "Wagtail admin: /admin/iot/ — OTA at /admin/iot/ota/.",
-      "Extend: add schemas to ALLOWED_SCHEMAS; document in protocol.md; keep envelope validation in services in sync."
+      "Define allowed schemas per DeviceProfile; keep docs/protocol.md and firmware contracts synchronized."
     ]
   }
 }

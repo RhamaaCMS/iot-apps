@@ -37,9 +37,11 @@
   </div>
 
   <p class="iot-actions">
-    <a href="{{ snippets.organization.list }}">{% trans "Organisasi (Snippet)" %}</a>
-    <a href="{{ snippets.device.list }}">{% trans "Perangkat (Snippet)" %}</a>
-    <a href="{{ snippets.organizationmembership.list }}">{% trans "Keanggotaan (Snippet)" %}</a>
+    {% if request.user.is_superuser %}
+      <a href="{{ snippets.organization.list }}">{% trans "Organisasi (Snippet)" %}</a>
+      <a href="{{ snippets.device.list }}">{% trans "Perangkat (Snippet)" %}</a>
+      <a href="{{ snippets.organizationmembership.list }}">{% trans "Keanggotaan (Snippet)" %}</a>
+    {% endif %}
   </p>
 
   <div class="iot-panel">

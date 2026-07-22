@@ -1,6 +1,31 @@
 # IoT App
 
-Multi-tenant MQTT device registry with strict JSON envelope handling, Wagtail admin dashboards, and OTA firmware delivery (signed HTTPS download + MQTT `ota_command.v1` / `ota_status.v1`). Integrates with the project MQTT bridge (`apps.mqtt`) for publish/subscribe.
+Multi-tenant connected-device domain for RhamaaCMS `base-iot`. MQTT runtime stays in `apps.mqtt`; this app owns profiles, provisioning, fleet identity, canonical telemetry ingest, state shadow, command lifecycle, audit events, and OTA.
+
+## Connected Device MVP
+
+- `DeviceProfile`: per-tenant product/protocol contract and schema allowlist.
+- Provisioning: expiring bootstrap token -> claimed device + one-time plain credential.
+- Credentials: hashed at rest, authenticatable, revocable, last-use metadata.
+- Telemetry: canonical `TelemetryRecord`, `(device, msg_id)` idempotency, server/device timestamps separated.
+- State shadow: desired/reported documents, versions, delta, retained MQTT desired-state downlink.
+- Commands: pending/sent/acknowledged/succeeded/failed lifecycle.
+- Tenant scope: IoT dashboard/API filtered by `OrganizationMembership`; superusers retain global access.
+- Extension signals for InfluxDB and project-specific apps.
+- MQTT outbox: database-backed at-least-once downlink delivery with retry and stale-lock recovery.
+- Raw Wagtail snippet CRUD/choosers: superuser-only; tenant users use scoped IoT panels.
+
+Provisioning: `POST /IoT/api/v1/provision/` with `{"token":"<id>.<secret>","name":"Device name","hardware_version":"rev1"}`. Returned credential appears once.
+
+Create bootstrap token:
+
+```bash
+python manage.py iot_create_provisioning_token --org acme --profile sensor --ttl-minutes 60
+```
+
+Schedule `python manage.py iot_expire_commands` periodically to close expired commands.
+
+Run `python manage.py iot_dispatch_outbox --limit 100` continuously or on a short schedule. HTTP/admin requests only enqueue MQTT downlinks; dispatcher performs broker I/O and retry.
 
 > **Note:** Python package is `apps.IoT` (capital `IoT`) — use exactly that in `INSTALLED_APPS` and imports.
 
@@ -411,7 +436,7 @@ All MQTT payloads must be UTF-8 JSON objects with these required fields:
 | `org` | string | Organization slug (must match topic) |
 | `device_id` | string | Device UUID (must match topic + DB) |
 | `channel` | string | e.g. `telemetry`, `heartbeat`, `ota` |
-| `schema` | string | Must be in `ALLOWED_SCHEMAS` |
+| `schema` | string | Must satisfy global and device-profile allowlists when configured |
 | `data` | object | All business fields under this key |
 
 ### Topic Layout
@@ -423,22 +448,16 @@ iot/v1/{org_slug}/{device_id}/up/heartbeat
 iot/v1/{org_slug}/{device_id}/up/ota
 ```
 
-**Downlink (OTA):**
+**Downlink:**
 ```
 iot/v1/{org_slug}/{device_id}/down/ota
+iot/v1/{org_slug}/{device_id}/down/state
+iot/v1/{org_slug}/{device_id}/down/command
 ```
 
 ### Allowed Schemas
 
-Current whitelist (from `constants.ALLOWED_SCHEMAS`):
-
-| Schema | Purpose |
-|---|---|
-| `solar_telemetry.v1` | Solar panel telemetry data |
-| `heartbeat.v1` | Device heartbeat / keepalive |
-| `ota_status.v1` | OTA progress / result reporting |
-
-Add new schemas to `ALLOWED_SCHEMAS` in `constants.py` when introducing new message types.
+Global `constants.ALLOWED_SCHEMAS` is empty by default. Define reusable protocol contracts per `DeviceProfile.allowed_schemas`; an empty profile list accepts any valid schema.
 
 ### Example Telemetry Uplink
 

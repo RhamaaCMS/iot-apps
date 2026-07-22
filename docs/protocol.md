@@ -12,7 +12,7 @@ Body format: **MQTT payload = UTF-8 JSON string** (one object per message).
 | `org`        | string | **Slug** of the organization (must match the topic segment). |
 | `device_id`  | string | **UUID** of the device (must match topic and DB). |
 | `channel`    | string | e.g. `telemetry`, `heartbeat`, `status` |
-| `schema`     | string | Contract for `data` keys, e.g. `solar_telemetry.v1` (see `ALLOWED_SCHEMAS`). |
+| `schema`     | string | Contract for `data` keys, checked against `DeviceProfile.allowed_schemas` when configured. |
 | `data`       | object | All sensor / business fields **must** live under `data`. |
 
 ## Topic template (uplink, telemetry)
@@ -47,7 +47,7 @@ You may add other suffixes (e.g. `.../up/heartbeat`) as long as the server subsc
 ## Evolving `data`
 
 - Never rename keys in an existing `schema` in a breaking way.  
-- For new fields or breaking changes, register a **new** `schema` value and add it to `ALLOWED_SCHEMAS` in `apps/IoT/constants.py` when the server should validate it.
+- For breaking changes, use a new schema version and add it to the device profile. Global `ALLOWED_SCHEMAS` is optional and empty by default.
 
 ## Downlink (server → device)
 
@@ -57,7 +57,14 @@ Use the same envelope and `data` for commands. Topic pattern (suggested):
 iot/v1/{org_slug}/{device_id}/down/{message_type}
 ```
 
-(Implementation of publish/ACK is optional in later phases.)
+Implemented contracts:
+
+- Desired state: `.../down/state`, schema `device_state_desired.v1`, retained QoS 1.
+- Reported state: `.../up/state`, schema `device_state.v1`.
+- Command: `.../down/command`, schema `command_request.v1`.
+- Command status: `.../up/command`, schema `command_status.v1`, correlated by `data.command_id`.
+
+`msg_id` provides per-device idempotency. `last_seen_at` uses server receive time; device `ts` remains in `last_device_timestamp` and `TelemetryRecord.device_timestamp`.
 
 ## OTA (firmware over MQTT + HTTPS download)
 

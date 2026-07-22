@@ -295,14 +295,20 @@ def get_compatible_firmware_versions(device) -> QuerySet:
 
     # Filter by hardware version if set
     if hw_version:
-        # This is a simplified filter - in practice you might want more complex logic
-        # for hardware version comparison
-        from django.db.models import Q
-        qs = qs.filter(
-            Q(min_hardware_version="") | Q(min_hardware_version__lte=hw_version)
-        ).filter(
-            Q(max_hardware_version="") | Q(max_hardware_version__gte=hw_version)
-        )
+        from .versioning import version_in_range
+
+        compatible_ids = [
+            firmware.pk
+            for firmware in qs.only(
+                "pk", "min_hardware_version", "max_hardware_version"
+            )
+            if version_in_range(
+                hw_version,
+                firmware.min_hardware_version,
+                firmware.max_hardware_version,
+            )
+        ]
+        qs = qs.filter(pk__in=compatible_ids)
 
     return qs
 

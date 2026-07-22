@@ -24,7 +24,7 @@
   <div class="iot-panel">
     <div class="iot-panel__head">
       <span>{% trans "Semua perangkat" %} ({{ row_count }})</span>
-      <a class="button button-primary" href="{{ snippets.device.add }}">{% trans "Tambah perangkat" %}</a>
+      {% if request.user.is_superuser %}<a class="button button-primary" href="{{ snippets.device.add }}">{% trans "Tambah perangkat" %}</a>{% endif %}
     </div>
     <div class="iot-panel__body iot-table-wrap">
       <table class="iot-table" aria-label="{% trans "Daftar perangkat" %}">
@@ -63,7 +63,7 @@
                 {% trans "Lihat" %}
               </button>
             </td>
-            <td><a class="button button-small" href="{{ r.edit_href }}">{% trans "Ubah" %}</a></td>
+            <td>{% if r.edit_href %}<a class="button button-small" href="{{ r.edit_href }}">{% trans "Ubah" %}</a>{% endif %}</td>
           </tr>
           <tr
             class="iot-mqtt-expand"
@@ -89,7 +89,7 @@
           {% endfor %}
         </tbody>
       </table>
-      <p style="margin:0.75rem 0 0;"><a class="iot-link-quiet" href="{{ snippets.device.list }}">{% trans "Buka daftar penuh di Snippet" %}</a></p>
+      {% if request.user.is_superuser %}<p style="margin:0.75rem 0 0;"><a class="iot-link-quiet" href="{{ snippets.device.list }}">{% trans "Buka daftar penuh di Snippet" %}</a></p>{% endif %}
     </div>
   </div>
 </div>

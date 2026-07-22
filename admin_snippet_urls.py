@@ -23,16 +23,19 @@ def snippet_edit_url(model_meta_name: str, pk: int) -> str:
     return reverse(f"{_viewset_name(model_meta_name)}:edit", args=[pk])
 
 
-def all_snippet_links() -> dict:
+def all_snippet_links(user=None) -> dict:
     """
     For templates: list, add, and (optional) discover views.
     """
+    if user is not None and not user.is_superuser:
+        return {}
     out: dict = {}
     for name in (
         "organization",
         "organizationmembership",
+        "deviceprofile",
         "device",
-        "firmwarepackage",
+        "firmwareversion",
         "deviceotajob",
     ):
         try:

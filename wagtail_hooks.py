@@ -1,6 +1,18 @@
 from django.urls import include, path, reverse
 from wagtail import hooks
 from wagtail.admin.menu import Menu, MenuItem, SubmenuMenuItem
+from wagtail.snippets.models import register_snippet
+
+from .snippet_viewsets import IOT_SNIPPET_VIEWSETS
+
+
+for snippet_viewset in IOT_SNIPPET_VIEWSETS:
+    register_snippet(snippet_viewset)
+
+
+class SuperuserMenuItem(MenuItem):
+    def is_shown(self, request):
+        return request.user.is_superuser
 
 
 def _iot_submenu_items():
@@ -26,6 +38,13 @@ def _iot_submenu_items():
             order=30,
             name="iot-menu-memberships",
         ),
+        SuperuserMenuItem(
+            "Device Profiles",
+            reverse("wagtailsnippets_iot_deviceprofile:list"),
+            icon_name="tasks",
+            order=35,
+            name="iot-menu-device-profiles",
+        ),
         MenuItem(
             "Perangkat",
             reverse("iot:panel_devices"),
@@ -33,7 +52,7 @@ def _iot_submenu_items():
             order=40,
             name="iot-menu-devices",
         ),
-        MenuItem(
+        SuperuserMenuItem(
             "Firmware Versions",
             reverse("wagtailsnippets_iot_firmwareversion:list"),
             icon_name="doc-full",

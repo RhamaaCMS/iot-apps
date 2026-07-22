@@ -8,9 +8,4 @@ class IotConfig(AppConfig):
     verbose_name = "IoT"
 
     def ready(self) -> None:
-        from apps.mqtt.signals import mqtt_message_received
-        from apps.IoT.mqtt_handlers import on_mqtt_incoming
-
-        mqtt_message_received.connect(
-            on_mqtt_incoming, dispatch_uid="iot_mqtt_uplink"
-        )
+        from . import mqtt_handlers  # noqa: F401

@@ -9,10 +9,10 @@ import uuid
 from typing import Any
 from urllib.parse import quote
 
-from asgiref.sync import async_to_sync
 from django.conf import settings
 from django.core import signing
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.models import QuerySet
 from django.utils import timezone
 
@@ -63,15 +63,13 @@ def _cancel_superseded_jobs(device: Device, keep: DeviceOTAJob) -> int:
             )
         )
     )
-    count = qs.count()
     now = timezone.now()
     msg = f"Superseded by job {keep.job_id}."
-    for old in qs:
-        old.status = OTAJobStatus.CANCELLED
-        old.error_message = msg
-        old.completed_at = now
-        old.save(update_fields=["status", "error_message", "completed_at", "id"])
-    return count
+    return qs.update(
+        status=OTAJobStatus.CANCELLED,
+        error_message=msg,
+        completed_at=now,
+    )
 
 
 def get_compatible_firmware_for_device(
@@ -101,17 +99,27 @@ def get_compatible_firmware_for_device(
 
     # Filter by hardware version if device has hardware version set
     if hw_version:
-        from django.db.models import Q
-        qs = qs.filter(
-            Q(min_hardware_version="") | Q(min_hardware_version__lte=hw_version)
-        ).filter(
-            Q(max_hardware_version="") | Q(max_hardware_version__gte=hw_version)
-        )
+        from .versioning import version_in_range
+
+        compatible_ids = [
+            firmware.pk
+            for firmware in qs.only(
+                "pk", "min_hardware_version", "max_hardware_version"
+            )
+            if version_in_range(
+                hw_version,
+                firmware.min_hardware_version,
+                firmware.max_hardware_version,
+            )
+        ]
+        qs = qs.filter(pk__in=compatible_ids)
 
     return qs.order_by("-created_at")
 
 
+@transaction.atomic
 def create_ota_job(device: Device, firmware: FirmwareVersion) -> DeviceOTAJob:
+    device = Device.objects.select_for_update().get(pk=device.pk)
     if not device.is_active:
         raise ValidationError("Device is not active.")
     if not firmware.is_active or not firmware.file or not firmware.sha256:
@@ -127,17 +135,10 @@ def create_ota_job(device: Device, firmware: FirmwareVersion) -> DeviceOTAJob:
     
     # Validate hardware version compatibility
     hw_version = (device.hardware_version or "").strip()
-    if hw_version:
-        if firmware.min_hardware_version and hw_version < firmware.min_hardware_version:
-            raise ValidationError(
-                f"Device hardware version {hw_version!r} is below minimum "
-                f"required {firmware.min_hardware_version!r} for this firmware."
-            )
-        if firmware.max_hardware_version and hw_version > firmware.max_hardware_version:
-            raise ValidationError(
-                f"Device hardware version {hw_version!r} exceeds maximum "
-                f"supported {firmware.max_hardware_version!r} for this firmware."
-            )
+    if hw_version and not firmware.is_compatible_with_device(device):
+        raise ValidationError(
+            f"Device hardware version {hw_version!r} is incompatible with this firmware."
+        )
     
     # Check if file actually exists in storage
     from . import firmware_services
@@ -184,9 +185,10 @@ def build_ota_command_json(job: DeviceOTAJob, download_url: str) -> dict[str, An
     }
 
 
-def _publish_ota_payload(job: DeviceOTAJob, public_base: str | None) -> str:
-    """Build signed URL, publish to MQTT; return topic (for logging). Does not save job."""
-    from apps.mqtt.client import mqtt_client
+def _publish_ota_payload(
+    job: DeviceOTAJob, public_base: str | None, *, deduplicate: bool
+) -> str:
+    """Build signed URL and enqueue MQTT outbox message."""
 
     base = (public_base or get_ota_public_base_url()).rstrip("/")
     token = signing.dumps(
@@ -204,24 +206,24 @@ def _publish_ota_payload(job: DeviceOTAJob, public_base: str | None) -> str:
         build_ota_command_json(job, download_url),
         ensure_ascii=False,
     )
-    try:
-        async_to_sync(mqtt_client.publish)(topic, payload, qos=1, retain=False)
-    except Exception as e:
-        logger.exception("OTA MQTT publish failed job=%s", job.job_id)
-        raise ValidationError(
-            f"MQTT publish failed (is the bridge connected?). {e}"
-        ) from e
+    from .integrations.mqtt import enqueue_mqtt
+
+    enqueue_mqtt(
+        topic=topic,
+        payload=payload,
+        qos=1,
+        retain=False,
+        event_type="ota" if deduplicate else f"ota-republish-{uuid.uuid4().hex[:8]}",
+        reference_id=job.job_id,
+    )
     return topic
 
 
 def publish_ota_command(job: DeviceOTAJob, public_base: str | None = None) -> None:
     if job.status != OTAJobStatus.PENDING:
         raise ValidationError("Only a pending job can be published to MQTT.")
-    topic = _publish_ota_payload(job, public_base)
-    job.status = OTAJobStatus.SENT
-    job.command_sent_at = timezone.now()
-    job.save(update_fields=["status", "command_sent_at", "id"])
-    logger.info("OTA command published: job=%s topic=%s", job.job_id, topic)
+    topic = _publish_ota_payload(job, public_base, deduplicate=True)
+    logger.info("OTA command queued: job=%s topic=%s", job.job_id, topic)
 
 
 def republish_ota_command(job: DeviceOTAJob, public_base: str | None = None) -> None:
@@ -231,10 +233,8 @@ def republish_ota_command(job: DeviceOTAJob, public_base: str | None = None) -> 
     """
     if job.status != OTAJobStatus.SENT:
         raise ValidationError("Only a sent job can be republished.")
-    topic = _publish_ota_payload(job, public_base)
-    job.command_sent_at = timezone.now()
-    job.save(update_fields=["command_sent_at", "id"])
-    logger.info("OTA command republished: job=%s topic=%s", job.job_id, topic)
+    topic = _publish_ota_payload(job, public_base, deduplicate=False)
+    logger.info("OTA command requeued: job=%s topic=%s", job.job_id, topic)
 
 
 def apply_ota_status_uplink(device: Device, envelope: dict[str, Any]) -> None:
