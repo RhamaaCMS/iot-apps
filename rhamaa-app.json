@@ -2,7 +2,7 @@
   "schema_version": "1.0.0",
   "name": "IoT",
   "slug": "iot",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "description": "Connected-device domain: app-scoped MQTT, auto-registry, profile inference, credentials, telemetry, state, commands, audit, and OTA.",
   "author": "RhamaaCMS",
   "package_name": "IoT",
@@ -24,7 +24,13 @@
       "note": "Wagtail admin templates under apps/IoT/templates/IoT/admin/ (include _iot_styles.html, _iot_subnav.html)."
     },
     "auth_backends": [],
-    "settings": {}
+    "settings": {
+      "IOT_APP_ID": {
+        "generate": "unique_slug",
+        "prefix": "iot",
+        "description": "Stable unique deployment ID shared with RhamaaIoT-ESP32 devices."
+      }
+    }
   },
 
   "urls": [
