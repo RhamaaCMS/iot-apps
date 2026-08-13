@@ -1,0 +1,42 @@
+<script>
+(function () {
+  "use strict";
+
+  function openDialog(dialog) {
+    if (!dialog) return;
+    if (typeof dialog.showModal === "function") {
+      if (!dialog.open) dialog.showModal();
+      return;
+    }
+    dialog.setAttribute("open", "");
+  }
+
+  document.addEventListener("click", function (event) {
+    var opener = event.target.closest("[data-iot-modal-open]");
+    if (opener) {
+      event.preventDefault();
+      openDialog(document.getElementById(opener.getAttribute("data-iot-modal-open")));
+      return;
+    }
+
+    var closer = event.target.closest("[data-iot-modal-close]");
+    if (closer) {
+      var parentDialog = closer.closest(".iot-dialog");
+      if (parentDialog) parentDialog.close();
+      return;
+    }
+
+    if (event.target.matches(".iot-dialog")) event.target.close();
+  });
+
+  function openInvalidForm() {
+    document.querySelectorAll(".iot-dialog[data-iot-auto-open]").forEach(openDialog);
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", openInvalidForm, {once: true});
+  } else {
+    openInvalidForm();
+  }
+})();
+</script>

@@ -1,0 +1,35 @@
+{% extends "wagtailadmin/base.html" %}
+{% load i18n %}
+
+{% block titletag %}{{ title }}{% endblock %}
+{% block extra_css %}{% include "IoT/admin/_iot_styles.html" %}{% endblock %}
+
+{% block content %}
+<main class="iot-locus iot-dashboard">
+  {% include "IoT/admin/_iot_subnav.html" %}
+  {% include "IoT/admin/_device_subnav.html" %}
+
+  <div class="iot-hero w-mb-4">
+    <h1 class="w-h1 w-mt-0">{% trans "Firmware" %}</h1>
+    <p class="w-help" style="margin:0.2rem 0 0">{% trans "Registry binary yang siap dipilih untuk deployment OTA." %}</p>
+  </div>
+  <section class="iot-panel">
+    <header class="iot-panel__head">
+      <span>{% trans "Firmware registry" %} ({{ row_count }})</span>
+      {% if request.user.is_superuser %}<button type="button" class="button button-primary" data-iot-modal-open="iot-create-firmware">{% trans "Upload firmware" %}</button>{% endif %}
+    </header>
+    <div class="iot-panel__body iot-table-wrap">
+      <table class="iot-table" aria-label="{% trans 'Firmware registry' %}">
+        <thead><tr><th>{% trans "Device Profile" %}</th><th>{% trans "Produk" %}</th><th>{% trans "Versi" %}</th><th>{% trans "Ukuran" %}</th><th>SHA256</th><th>{% trans "Status" %}</th><th>{% trans "Dibuat" %}</th><th><span class="w-sr-only">{% trans "Aksi" %}</span></th></tr></thead>
+        <tbody>
+          {% for r in rows %}
+            <tr><td>{{ r.profile }} <small class="w-help">{{ r.profile_slug }}</small></td><td><code class="iot-table__mono">{{ r.product }}</code></td><td>{{ r.version }}</td><td>{{ r.file_size|filesizeformat }}</td><td><code class="iot-table__mono">{{ r.sha256|slice:":12" }}{% if r.sha256 %}…{% endif %}</code></td><td>{% if r.is_active %}{% trans "Aktif" %}{% else %}{% trans "Nonaktif" %}{% endif %}{% if r.is_mandatory %} · {% trans "Wajib" %}{% endif %}</td><td>{{ r.created|date:"Y-m-d H:i" }}</td><td>{% if r.edit_href %}<a class="button button-small" href="{{ r.edit_href }}">{% trans "Ubah" %}</a>{% endif %}</td></tr>
+          {% empty %}<tr><td colspan="8" class="w-help">{% trans "Belum ada firmware." %}</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {% if request.user.is_superuser %}{% include "IoT/admin/_create_modal.html" with modal_id="iot-create-firmware" modal_title="Upload firmware" modal_submit_label="Simpan firmware" modal_multipart=True %}{% endif %}
+</main>
+{% endblock %}
+{% block extra_js %}{% include "IoT/admin/_modal_script.html" %}{% endblock %}

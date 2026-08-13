@@ -8,33 +8,45 @@
 {% endblock %}
 
 {% block content %}
-<div class="iot-locus">
-  <div class="iot-hero w-mb-4">
-    <h1 class="w-h1 w-mt-0">{{ title }}</h1>
-    <p class="w-help" style="margin: 0.2rem 0 0">
-      {% trans "Log cocok prefix perangkat. Riwayat awal di API; pesan baru menyusul lewat saluran WebSocket yang sama dengan panel MQTT." %}
-    </p>
+<main class="iot-locus iot-dashboard">
+  {% include "IoT/admin/_iot_subnav.html" %}
+  {% include "IoT/admin/_device_subnav.html" %}
+
+  <div class="iot-hero iot-command-hero">
+    <div class="iot-command-hero__copy">
+      <span class="iot-section-kicker">{% trans "Fleet operations" %}</span>
+      <h1>{{ title }}</h1>
+      <p>{% trans "Pantau kesehatan fleet, identitas perangkat, dan aktivitas MQTT dari satu ruang kerja." %}</p>
+    </div>
+    {% if request.user.is_superuser %}<button class="button button-primary iot-primary-action" type="button" data-iot-modal-open="iot-create-device"><span aria-hidden="true">+</span> {% trans "Tambah perangkat" %}</button>{% endif %}
     <p class="iot-mqtt-ws-pill" id="iot-mqtt-ws-pill" role="status" aria-live="polite">
       <span class="status-dot no" id="iot-mqtt-ws-dot" aria-hidden="true"></span>
       <span id="iot-mqtt-ws-txt">{% trans "Sambungan siaran…" %}</span>
     </p>
   </div>
-  {% include "IoT/admin/_iot_subnav.html" %}
-
+  <section class="iot-metric-strip" aria-label="{% trans 'Ringkasan fleet' %}">
+    <div><span>{% trans "Total" %}</span><strong>{{ row_count }}</strong><small>{% trans "terdaftar" %}</small></div>
+    <div class="is-positive"><span>{% trans "Online" %}</span><strong>{{ online_count }}</strong><small>{% trans "aktif sekarang" %}</small></div>
+    <div><span>{% trans "Berprofil" %}</span><strong>{{ profiled_count }}</strong><small>{% trans "siap dikelola" %}</small></div>
+    <div{% if inactive_count %} class="is-warning"{% endif %}><span>{% trans "Nonaktif" %}</span><strong>{{ inactive_count }}</strong><small>{% trans "perlu ditinjau" %}</small></div>
+  </section>
   <div class="iot-panel">
     <div class="iot-panel__head">
-      <span>{% trans "Semua perangkat" %} ({{ row_count }})</span>
-      {% if request.user.is_superuser %}<a class="button button-primary" href="{{ snippets.device.add }}">{% trans "Tambah perangkat" %}</a>{% endif %}
+      <div><span class="iot-section-kicker">{% trans "Inventory" %}</span><h2>{% trans "Semua perangkat" %}</h2></div>
+      <div class="iot-list-tools">
+        <label class="iot-search"><span aria-hidden="true">⌕</span><span class="w-sr-only">{% trans "Cari perangkat" %}</span><input type="search" placeholder="{% trans 'Cari nama, ID, organisasi…' %}" data-iot-device-search></label>
+        <select data-iot-device-status aria-label="{% trans 'Filter status perangkat' %}"><option value="all">{% trans "Semua status" %}</option><option value="online">{% trans "Online" %}</option><option value="offline">{% trans "Offline" %}</option><option value="inactive">{% trans "Nonaktif" %}</option></select>
+      </div>
     </div>
     <div class="iot-panel__body iot-table-wrap">
       <table class="iot-table" aria-label="{% trans "Daftar perangkat" %}">
         <thead>
-          <tr>
+          <tr data-iot-device-row data-search="{{ r.name|lower }} {{ r.device_id|lower }} {{ r.org_name|lower }} {{ r.org_slug|lower }} {{ r.profile|lower }}" data-status="{% if not r.is_active %}inactive{% elif r.online %}online{% else %}offline{% endif %}">
             <th scope="col">{% trans "Online" %}</th>
             <th scope="col">{% trans "Organisasi" %}</th>
             <th scope="col">{% trans "Nama" %}</th>
             <th scope="col">device_id</th>
-            <th scope="col">{% trans "OTA product" %}</th>
+            <th scope="col">{% trans "Device profile" %}</th>
             <th scope="col">{% trans "Aktif" %}</th>
             <th scope="col">last_seen</th>
             <th scope="col">channel</th>
@@ -53,7 +65,7 @@
             <td>{{ r.org_name }} <span class="w-help">({{ r.org_slug }})</span></td>
             <td>{{ r.name }}</td>
             <td><code class="iot-table__mono">{{ r.device_id }}</code></td>
-            <td><code class="iot-table__mono">{{ r.firmware_product }}</code></td>
+            <td>{{ r.profile }}</td>
             <td>{% if r.is_active %}{% trans "Ya" %}{% else %}{% trans "Tidak" %}{% endif %}</td>
             <td>{% if r.last_seen %}{{ r.last_seen|date:"Y-m-d H:i:s" }}{% else %}—{% endif %}</td>
             <td>{{ r.last_channel }}</td>
@@ -85,17 +97,22 @@
             </td>
           </tr>
           {% empty %}
-          <tr><td colspan="10" class="w-help">{% trans "Belum ada perangkat." %}</td></tr>
+          <tr><td colspan="11"><div class="iot-empty-state"><strong>{% trans "Fleet masih kosong" %}</strong><p>{% trans "Tambahkan perangkat pertama untuk mulai menerima telemetry dan mengelola OTA." %}</p></div></td></tr>
           {% endfor %}
+          <tr data-iot-device-no-results hidden><td colspan="11"><div class="iot-empty-state"><strong>{% trans "Perangkat tidak ditemukan" %}</strong><p>{% trans "Coba kata kunci atau status yang berbeda." %}</p></div></td></tr>
         </tbody>
       </table>
       {% if request.user.is_superuser %}<p style="margin:0.75rem 0 0;"><a class="iot-link-quiet" href="{{ snippets.device.list }}">{% trans "Buka daftar penuh di Snippet" %}</a></p>{% endif %}
     </div>
   </div>
-</div>
+  {% if request.user.is_superuser %}
+    {% include "IoT/admin/_create_modal.html" with modal_id="iot-create-device" modal_title="Tambah perangkat" modal_submit_label="Simpan perangkat" %}
+  {% endif %}
+</main>
 {% endblock %}
 
 {% block extra_js %}
+{% include "IoT/admin/_modal_script.html" %}
 <script>
 (function() {
   "use strict";
@@ -117,6 +134,26 @@
   var WS_URL = wsProto + "://" + location.host + "/ws/mqtt/dashboard/";
   var iotMqttWs = null;
   var iotMqttPing = null;
+
+  var deviceSearch = document.querySelector("[data-iot-device-search]");
+  var deviceStatus = document.querySelector("[data-iot-device-status]");
+  var deviceRows = Array.prototype.slice.call(document.querySelectorAll("[data-iot-device-row]"));
+  var deviceNoResults = document.querySelector("[data-iot-device-no-results]");
+  function filterDevices() {
+    var term = (deviceSearch && deviceSearch.value || "").trim().toLowerCase();
+    var status = deviceStatus && deviceStatus.value || "all";
+    var visible = 0;
+    deviceRows.forEach(function (row) {
+      var show = (!term || row.getAttribute("data-search").indexOf(term) !== -1) && (status === "all" || row.getAttribute("data-status") === status);
+      row.hidden = !show;
+      var detail = row.nextElementSibling;
+      if (!show && detail && detail.classList.contains("iot-mqtt-expand")) detail.hidden = true;
+      if (show) visible += 1;
+    });
+    if (deviceNoResults) deviceNoResults.hidden = visible !== 0 || deviceRows.length === 0;
+  }
+  if (deviceSearch) deviceSearch.addEventListener("input", filterDevices);
+  if (deviceStatus) deviceStatus.addEventListener("change", filterDevices);
 
   function fmtIso(iso) {
     if (!iso) return "\u2014";

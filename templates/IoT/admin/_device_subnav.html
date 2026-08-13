@@ -1,0 +1,11 @@
+{% load i18n %}
+<nav class="iot-device-nav" aria-label="{% trans 'Workspace perangkat' %}">
+  <span class="iot-device-nav__label">{% trans "Device workspace" %}</span>
+  <div class="iot-device-nav__links">
+    <a href="{% url 'iot:panel_devices' %}"{% if iot_active_section == 'devices' %} class="is-active" aria-current="page"{% endif %}>{% trans "Fleet" %}</a>
+    <a href="{% url 'iot:panel_registrations' %}"{% if iot_active_section == 'registrations' %} class="is-active" aria-current="page"{% endif %}>{% trans "Registrasi" %}</a>
+    <a href="{% url 'iot:panel_profiles' %}"{% if iot_active_section == 'profiles' %} class="is-active" aria-current="page"{% endif %}>{% trans "Profiles" %}</a>
+    <a href="{% url 'iot:panel_firmware' %}"{% if iot_active_section == 'firmware' %} class="is-active" aria-current="page"{% endif %}>{% trans "Firmware" %}</a>
+    <a href="{% url 'iot:panel_ota' %}"{% if iot_active_section == 'ota' %} class="is-active" aria-current="page"{% endif %}>OTA</a>
+  </div>
+</nav>

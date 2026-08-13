@@ -1,0 +1,80 @@
+{% load i18n %}
+<dialog class="iot-dialog iot-dialog--membership" id="iot-create-user"{% if open_membership_modal %} data-iot-auto-open{% endif %} aria-labelledby="iot-create-user-title">
+  <div class="iot-dialog__surface">
+    <header class="iot-dialog__head">
+      <div>
+        <span class="iot-section-kicker">{% trans "Quick create" %}</span>
+        <h2 id="iot-create-user-title">{% trans "Tambah akses IoT" %}</h2>
+      </div>
+      <button class="iot-dialog__close" type="button" data-iot-modal-close aria-label="{% trans 'Tutup panel' %}">×</button>
+    </header>
+
+    <nav class="iot-dialog-tabs" aria-label="{% trans 'Jenis penambahan user' %}" role="tablist">
+      <button type="button" role="tab" data-iot-membership-tab="new" aria-controls="iot-membership-new" aria-selected="{% if membership_mode == 'new' %}true{% else %}false{% endif %}" class="{% if membership_mode == 'new' %}is-active{% endif %}">
+        <span>{% trans "User baru" %}</span>
+        <small>{% trans "Buat akun dan akses" %}</small>
+      </button>
+      <button type="button" role="tab" data-iot-membership-tab="existing" aria-controls="iot-membership-existing" aria-selected="{% if membership_mode == 'existing' %}true{% else %}false{% endif %}" class="{% if membership_mode == 'existing' %}is-active{% endif %}">
+        <span>{% trans "User terdaftar" %}</span>
+        <small>{% trans "Hubungkan akun tersedia" %}</small>
+      </button>
+    </nav>
+
+    <section id="iot-membership-new" role="tabpanel" data-iot-membership-panel="new"{% if membership_mode != 'new' %} hidden{% endif %}>
+      <form method="post" class="iot-dialog__form">
+        {% csrf_token %}<input type="hidden" name="membership_mode" value="new">
+        {% if new_user_form.non_field_errors %}<div class="iot-form-errors" role="alert">{{ new_user_form.non_field_errors }}</div>{% endif %}
+        <div class="iot-form-grid">
+          {% for field in new_user_form %}
+            <div class="iot-form-field{% if field.field.widget.input_type == 'checkbox' %} iot-form-field--check{% endif %}">
+              <label for="{{ field.id_for_label }}">{{ field.label }}</label>{{ field }}
+              {% if field.help_text %}<small>{{ field.help_text|safe }}</small>{% endif %}
+              {% if field.errors %}<div class="iot-field-errors" role="alert">{{ field.errors }}</div>{% endif %}
+            </div>
+          {% endfor %}
+        </div>
+        <footer class="iot-dialog__actions"><button type="button" class="button" data-iot-modal-close>{% trans "Batal" %}</button><button type="submit" class="button button-primary">{% trans "Buat user & akses" %}</button></footer>
+      </form>
+    </section>
+
+    <section id="iot-membership-existing" role="tabpanel" data-iot-membership-panel="existing"{% if membership_mode != 'existing' %} hidden{% endif %}>
+      <form method="post" class="iot-dialog__form">
+        {% csrf_token %}<input type="hidden" name="membership_mode" value="existing">
+        {% if existing_user_form.non_field_errors %}<div class="iot-form-errors" role="alert">{{ existing_user_form.non_field_errors }}</div>{% endif %}
+        <div class="iot-membership-existing-intro">
+          <strong>{% trans "Gunakan akun yang sudah tersedia" %}</strong>
+          <p>{% trans "Tidak ada password yang diubah. Sistem hanya menambahkan akses user ke organisasi dan peran yang dipilih." %}</p>
+        </div>
+        <div class="iot-form-grid">
+          {% for field in existing_user_form %}
+            <div class="iot-form-field">
+              <label for="{{ field.id_for_label }}">{{ field.label }}</label>{{ field }}
+              {% if field.help_text %}<small>{{ field.help_text|safe }}</small>{% endif %}
+              {% if field.errors %}<div class="iot-field-errors" role="alert">{{ field.errors }}</div>{% endif %}
+            </div>
+          {% endfor %}
+        </div>
+        <footer class="iot-dialog__actions"><button type="button" class="button" data-iot-modal-close>{% trans "Batal" %}</button><button type="submit" class="button button-primary">{% trans "Tambahkan akses" %}</button></footer>
+      </form>
+    </section>
+  </div>
+</dialog>
+
+<script>
+(function () {
+  "use strict";
+  document.addEventListener("click", function (event) {
+    var tab = event.target.closest("[data-iot-membership-tab]");
+    if (!tab) return;
+    var mode = tab.getAttribute("data-iot-membership-tab");
+    document.querySelectorAll("[data-iot-membership-tab]").forEach(function (item) {
+      var active = item === tab;
+      item.classList.toggle("is-active", active);
+      item.setAttribute("aria-selected", active ? "true" : "false");
+    });
+    document.querySelectorAll("[data-iot-membership-panel]").forEach(function (panel) {
+      panel.hidden = panel.getAttribute("data-iot-membership-panel") !== mode;
+    });
+  });
+})();
+</script>

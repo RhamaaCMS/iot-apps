@@ -1,3 +1,4 @@
+import json
 from unittest.mock import AsyncMock, patch
 
 from django.test import TestCase
@@ -25,6 +26,9 @@ class CommandOutboxTests(TestCase):
         command.refresh_from_db()
         self.assertEqual(command.status, CommandStatus.PENDING)
         self.assertEqual(MQTTOutboxMessage.objects.get().reference_id, command.command_id)
+        message = MQTTOutboxMessage.objects.get()
+        self.assertTrue(message.topic.startswith("iot/v2/iot-dev-local/"))
+        self.assertEqual(json.loads(message.payload)["app_id"], "iot-dev-local")
 
     @patch("apps.mqtt.client.mqtt_client.publish", new_callable=AsyncMock)
     def test_dispatch_marks_outbox_and_command_sent(self, publish):

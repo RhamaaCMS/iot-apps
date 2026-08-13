@@ -12,7 +12,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 
-from .constants import COMMAND_SCHEMA_REQUEST, IOT_MQTT_TOPIC_PREFIX, STATE_SCHEMA_DESIRED
+from .constants import COMMAND_SCHEMA_REQUEST, ENVELOPE_VERSION, STATE_SCHEMA_DESIRED, build_device_topic, get_iot_app_id
 from .models import (
     CommandStatus,
     CredentialStatus,
@@ -30,13 +30,13 @@ from .signals import device_command_changed, device_state_changed
 
 def create_provisioning_token(
     organization: Organization,
-    profile: DeviceProfile,
+    profile: DeviceProfile | None,
     *,
     label: str = "",
     ttl: timedelta = timedelta(hours=24),
     max_claims: int = 1,
 ) -> tuple[ProvisioningToken, str]:
-    if profile.organization_id != organization.pk:
+    if profile and profile.organization_id != organization.pk:
         raise ValidationError("Profile must belong to organization.")
     if max_claims < 1 or ttl <= timedelta(0):
         raise ValidationError("Provisioning token requires positive ttl and max_claims.")
@@ -71,6 +71,8 @@ def claim_device(raw_token: str, *, name: str, hardware_version: str = "") -> tu
         raise ValidationError("Invalid provisioning token.") from exc
     if not token.can_claim or not check_password(secret, token.secret_hash):
         raise ValidationError("Provisioning token expired, exhausted, or invalid.")
+    if not token.profile_id:
+        raise ValidationError("This token requires the auto-registry flow.")
 
     device = Device(
         organization=token.organization,
@@ -129,8 +131,8 @@ def set_desired_state(device: Device, desired: dict, *, publish: bool = True) ->
     state.desired_updated_at = timezone.now()
     state.save(update_fields=("desired", "desired_version", "desired_updated_at"))
     if publish:
-        topic = f"{IOT_MQTT_TOPIC_PREFIX}/{device.organization.slug}/{device.device_id}/down/state"
-        body = json.dumps({"v": 1, "ts": timezone.now().isoformat(), "org": device.organization.slug, "device_id": str(device.device_id), "channel": "state", "schema": STATE_SCHEMA_DESIRED, "data": {"version": state.desired_version, "desired": desired}})
+        topic = build_device_topic(device, "down", "state")
+        body = json.dumps({"v": ENVELOPE_VERSION, "ts": timezone.now().isoformat(), "app_id": get_iot_app_id(), "org": device.organization.slug, "device_id": str(device.device_id), "channel": "state", "schema": STATE_SCHEMA_DESIRED, "data": {"version": state.desired_version, "desired": desired}})
         from .integrations.mqtt import enqueue_mqtt
 
         enqueue_mqtt(topic=topic, payload=body, qos=1, retain=True, event_type="state")
@@ -181,8 +183,8 @@ def create_command(device: Device, name: str, payload: dict | None = None, *, ti
 def publish_command(command: DeviceCommand) -> DeviceCommand:
     if command.status != CommandStatus.PENDING:
         raise ValidationError("Only pending commands can be published.")
-    topic = f"{IOT_MQTT_TOPIC_PREFIX}/{command.device.organization.slug}/{command.device.device_id}/down/command"
-    body = json.dumps({"v": 1, "ts": timezone.now().isoformat(), "org": command.device.organization.slug, "device_id": str(command.device.device_id), "channel": "command", "schema": COMMAND_SCHEMA_REQUEST, "msg_id": str(command.command_id), "data": {"command_id": str(command.command_id), "name": command.name, "payload": command.payload, "expires_at": command.expires_at.isoformat() if command.expires_at else None}})
+    topic = build_device_topic(command.device, "down", "command")
+    body = json.dumps({"v": ENVELOPE_VERSION, "ts": timezone.now().isoformat(), "app_id": get_iot_app_id(), "org": command.device.organization.slug, "device_id": str(command.device.device_id), "channel": "command", "schema": COMMAND_SCHEMA_REQUEST, "msg_id": str(command.command_id), "data": {"command_id": str(command.command_id), "name": command.name, "payload": command.payload, "expires_at": command.expires_at.isoformat() if command.expires_at else None}})
     from .integrations.mqtt import enqueue_mqtt
 
     enqueue_mqtt(

@@ -8,7 +8,10 @@
 {% endblock %}
 
 {% block content %}
-<div class="iot-locus">
+<main class="iot-locus iot-dashboard">
+  {% include "IoT/admin/_iot_subnav.html" %}
+  {% include "IoT/admin/_device_subnav.html" %}
+
   <div class="iot-hero w-mb-4">
     <h1 class="w-h1 w-mt-0">{{ title }}</h1>
     <p class="w-help" style="margin: 0.2rem 0 0">
@@ -19,8 +22,6 @@
       <span class="w-help"> — {% trans "Set IOT_OTA_PUBLIC_BASE in production if devices use another host than Site." %}</span>
     </p>
   </div>
-  {% include "IoT/admin/_iot_subnav.html" %}
-
   {% if messages %}
   <ul class="messages" style="list-style: none; padding: 0; margin: 0 0 1rem 0">
     {% for message in messages %}
@@ -32,7 +33,7 @@
   <div class="iot-panel w-mb-3">
     <div class="iot-panel__head">
       <span>{% trans "Firmware" %}</span>
-      {% if request.user.is_superuser %}<a class="button button-small" href="{{ snips.list|default:'#' }}">{% trans "Snippet: firmware" %}</a>{% endif %}
+      <a class="button button-small" href="{% url 'iot:panel_firmware' %}">{% trans "Buka firmware registry" %}</a>
     </div>
     <div class="iot-panel__body">
       <p class="w-help" style="margin: 0">{% trans "Upload a binary, then create a job below for a target device." %}</p>
@@ -52,7 +53,7 @@
           <select name="device_pk" id="id_device_pk" required class="w-field__input" style="max-width: 48rem; width: 100%">
             <option value="">—</option>
             {% for o in device_options %}
-            <option value="{{ o.pk }}">{{ o.label }}</option>
+            <option value="{{ o.pk }}" data-profile="{{ o.profile_pk }}">{{ o.label }}</option>
             {% endfor %}
           </select>
         </p>
@@ -61,13 +62,14 @@
           <select name="firmware_pk" id="id_firmware_pk" required class="w-field__input" style="max-width: 48rem; width: 100%">
             <option value="">—</option>
             {% for o in firmware_options %}
-            <option value="{{ o.pk }}">{{ o.label }}</option>
+            <option value="{{ o.pk }}" data-profile="{{ o.profile_pk }}">{{ o.label }}</option>
             {% endfor %}
           </select>
         </p>
       <p class="w-help" style="margin: 0.75rem 0 0">
-        {% trans "Firmware product must match the device field firmware_product (Snippet → Device). Creating a new job cancels other pending/sent/in-progress jobs for that device." %}
+        {% trans "Firmware hanya tersedia untuk perangkat dengan Device Profile yang sama. Membuat job baru membatalkan job aktif sebelumnya untuk perangkat tersebut." %}
       </p>
+      <button type="submit" class="button button-primary">{% trans "Buat job OTA" %}</button>
       </form>
     </div>
   </div>
@@ -131,5 +133,31 @@
       </table>
     </div>
   </div>
-</div>
+</main>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  "use strict";
+  var device = document.getElementById("id_device_pk");
+  var firmware = document.getElementById("id_firmware_pk");
+  if (!device || !firmware) return;
+
+  function filterFirmware() {
+    var selected = device.options[device.selectedIndex];
+    var profile = selected ? selected.getAttribute("data-profile") : "";
+    Array.prototype.forEach.call(firmware.options, function (option, index) {
+      if (index === 0) return;
+      var compatible = Boolean(profile) && option.getAttribute("data-profile") === profile;
+      option.hidden = !compatible;
+      option.disabled = !compatible;
+    });
+    if (firmware.selectedOptions.length && firmware.selectedOptions[0].disabled) firmware.value = "";
+  }
+
+  device.addEventListener("change", filterFirmware);
+  filterFirmware();
+})();
+</script>
 {% endblock %}

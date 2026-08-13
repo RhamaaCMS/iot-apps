@@ -8,17 +8,17 @@
 {% endblock %}
 
 {% block content %}
-<div class="iot-locus">
-  <div class="iot-hero w-mb-4">
-    <h1 class="w-h1 w-mt-0">{{ title }}</h1>
-    <p class="w-help" style="margin: 0.2rem 0 0">{% trans "CRUD tersedia di antarmuka Snippet; panel ini fokus pada ringkasan dan aksi cepat." %}</p>
-  </div>
+<main class="iot-locus iot-dashboard">
   {% include "IoT/admin/_iot_subnav.html" %}
 
+  <div class="iot-hero w-mb-4">
+    <h1 class="w-h1 w-mt-0">{{ title }}</h1>
+    <p class="w-help" style="margin: 0.2rem 0 0">{% trans "Kelola tenant dan batas data fleet tanpa meninggalkan IoT workspace." %}</p>
+  </div>
   <div class="iot-panel">
     <div class="iot-panel__head">
       <span>{% trans "Semua organisasi" %} ({{ row_count }})</span>
-      {% if request.user.is_superuser %}<a class="button button-primary" href="{{ snippets.organization.add }}">{% trans "Tambah organisasi" %}</a>{% endif %}
+      {% if request.user.is_superuser %}<button class="button button-primary" type="button" data-iot-modal-open="iot-create-organization">{% trans "Tambah organisasi" %}</button>{% endif %}
     </div>
     <div class="iot-panel__body iot-table-wrap">
       <table class="iot-table" aria-label="{% trans "Organisasi" %}">
@@ -41,12 +41,17 @@
             <td>{% if r.edit_href %}<a class="button button-small" href="{{ r.edit_href }}">{% trans "Ubah" %}</a>{% endif %}</td>
           </tr>
           {% empty %}
-          <tr><td colspan="5" class="w-help">{% trans "Belum ada organisasi. Tambah lewat Snippet." %}</td></tr>
+          <tr><td colspan="5" class="w-help">{% trans "Belum ada organisasi." %}</td></tr>
           {% endfor %}
         </tbody>
       </table>
       {% if request.user.is_superuser %}<p style="margin:0.75rem 0 0;"><a class="iot-link-quiet" href="{{ snippets.organization.list }}">{% trans "Buka daftar penuh di Snippet" %}</a></p>{% endif %}
     </div>
   </div>
-</div>
+  {% if request.user.is_superuser %}
+    {% include "IoT/admin/_create_modal.html" with modal_id="iot-create-organization" modal_title="Tambah organisasi" modal_submit_label="Simpan organisasi" %}
+  {% endif %}
+</main>
 {% endblock %}
+
+{% block extra_js %}{% include "IoT/admin/_modal_script.html" %}{% endblock %}

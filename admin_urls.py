@@ -18,7 +18,10 @@ urlpatterns = [
         admin_views.panel_memberships,
         name="panel_memberships",
     ),
+    path("profiles/", admin_views.panel_profiles, name="panel_profiles"),
     path("devices/", admin_views.panel_devices, name="panel_devices"),
+    path("registrations/", admin_views.panel_registrations, name="panel_registrations"),
+    path("firmware/", admin_views.panel_firmware, name="panel_firmware"),
     path(
         "api/device/<int:device_pk>/mqtt-messages/",
         admin_views.api_device_mqtt_messages,

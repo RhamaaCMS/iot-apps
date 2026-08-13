@@ -11,7 +11,7 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("--org", required=True, help="Organization slug")
-        parser.add_argument("--profile", required=True, help="DeviceProfile slug")
+        parser.add_argument("--profile", help="DeviceProfile slug; omit for auto-registry")
         parser.add_argument("--ttl-minutes", type=int, default=60)
         parser.add_argument("--max-claims", type=int, default=1)
         parser.add_argument("--label", default="")
@@ -19,9 +19,11 @@ class Command(BaseCommand):
     def handle(self, **options):
         try:
             organization = Organization.objects.get(slug=options["org"], is_active=True)
-            profile = DeviceProfile.objects.get(
-                organization=organization, slug=options["profile"], is_active=True
-            )
+            profile = None
+            if options["profile"]:
+                profile = DeviceProfile.objects.get(
+                    organization=organization, slug=options["profile"], is_active=True
+                )
             _, raw_token = create_provisioning_token(
                 organization,
                 profile,

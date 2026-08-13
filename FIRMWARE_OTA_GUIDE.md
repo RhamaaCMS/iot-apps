@@ -53,10 +53,10 @@ Keunggulan:
 
 ### Upload Firmware Version
 
-1. Buka Wagtail Admin → IoT → Firmware Versions
+1. Buka Wagtail Admin → IoT → Perangkat → Firmware
 2. Klik "Add Firmware Version"
 3. Isi:
-   - **Product**: SKU hardware (e.g., "solar-controller-v2")
+   - **Device Profile**: profile pemilik firmware
    - **Version**: Semantic version (e.g., "1.4.0")
    - **File**: Binary firmware (.bin, .elf, .hex)
    - **Hardware Compatibility** (optional)
@@ -72,7 +72,7 @@ from apps.IoT.ota_services import create_ota_job, publish_ota_command
 
 # Get device and firmware
 device = Device.objects.get(device_id="...")
-firmware = FirmwareVersion.objects.get(product="solar-controller-v2", version="1.4.0")
+firmware = FirmwareVersion.objects.get(profile=device.profile, version="1.4.0")
 
 # Create job
 job = create_ota_job(device, firmware)

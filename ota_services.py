@@ -81,15 +81,16 @@ def get_compatible_firmware_for_device(
     Get firmware versions compatible with a device.
     
     Filters by:
-    - product match
+    - exact device profile ownership
     - is_active (if only_active=True)
     - hardware version constraints
     - mandatory flag (if include_mandatory_only=True)
     """
-    dev_product = (device.firmware_product or "").strip() or "default"
     hw_version = (device.hardware_version or "").strip()
 
-    qs = FirmwareVersion.objects.filter(product=dev_product)
+    qs = FirmwareVersion.objects.none()
+    if device.profile_id:
+        qs = FirmwareVersion.objects.filter(profile_id=device.profile_id)
     
     if only_active:
         qs = qs.filter(is_active=True)
@@ -125,12 +126,11 @@ def create_ota_job(device: Device, firmware: FirmwareVersion) -> DeviceOTAJob:
     if not firmware.is_active or not firmware.file or not firmware.sha256:
         raise ValidationError("Firmware is not available (inactive or not hashed).")
     
-    # Validate product compatibility
-    dev_product = (device.firmware_product or "").strip() or "default"
-    if (firmware.product or "").strip() != dev_product:
+    if not device.profile_id:
+        raise ValidationError("Device must have a profile before receiving OTA firmware.")
+    if not firmware.profile_id or firmware.profile_id != device.profile_id:
         raise ValidationError(
-            f"Firmware product {firmware.product!r} does not match device "
-            f"firmware_product {dev_product!r}."
+            "Firmware belongs to a different device profile."
         )
     
     # Validate hardware version compatibility
@@ -170,6 +170,7 @@ def build_ota_command_json(job: DeviceOTAJob, download_url: str) -> dict[str, An
         "v": constants.ENVELOPE_VERSION,
         "msg_id": str(uuid.uuid4()),
         "ts": ts,
+        "app_id": constants.get_iot_app_id(),
         "org": o.slug,
         "device_id": str(d.device_id),
         "channel": constants.OTA_CHANNEL,
@@ -201,7 +202,7 @@ def _publish_ota_payload(
     download_url = f"{base}/ota/firmware/?t={quote(token, safe='')}"
     d = job.device
     o = d.organization
-    topic = f"{constants.IOT_MQTT_TOPIC_PREFIX}/{o.slug}/{d.device_id}/down/ota"
+    topic = constants.build_device_topic(d, "down", "ota")
     payload = json.dumps(
         build_ota_command_json(job, download_url),
         ensure_ascii=False,

@@ -2,51 +2,75 @@
 {% load i18n %}
 
 {% block titletag %}{{ title }}{% endblock %}
-
-{% block extra_css %}
-{% include "IoT/admin/_iot_styles.html" %}
-{% endblock %}
+{% block extra_css %}{% include "IoT/admin/_iot_styles.html" %}{% endblock %}
 
 {% block content %}
-<div class="iot-locus">
-  <div class="iot-hero w-mb-4">
-    <h1 class="w-h1 w-mt-0">{{ title }}</h1>
-    <p class="w-help" style="margin: 0.2rem 0 0">{% trans "Menentukan user Django mana yang punya akses ke organisasi (peran: admin, member, viewer)." %}</p>
-  </div>
+<main class="iot-locus iot-dashboard">
   {% include "IoT/admin/_iot_subnav.html" %}
 
-  <div class="iot-panel">
-    <div class="iot-panel__head">
-      <span>{% trans "Keanggotaan" %} ({{ row_count }})</span>
-      {% if request.user.is_superuser %}<a class="button button-primary" href="{{ snippets.organizationmembership.add }}">{% trans "Tambah anggota" %}</a>{% endif %}
+  <header class="iot-access-hero iot-command-hero iot-command-hero--access">
+    <div>
+      <span class="iot-section-kicker">{% trans "Identity & tenancy" %}</span><h1>{{ title }}</h1>
+      <p>{% trans "Kelola organisasi, pengguna, dan batas akses fleet dari satu ruang kerja." %}</p>
     </div>
-    <div class="iot-panel__body iot-table-wrap">
-      <table class="iot-table" aria-label="{% trans "Keanggotaan" %}">
-        <thead>
-          <tr>
-            <th scope="col">{% trans "Pengguna" %}</th>
-            <th scope="col">{% trans "Email" %}</th>
-            <th scope="col">{% trans "Organisasi" %}</th>
-            <th scope="col">{% trans "Peran" %}</th>
-            <th scope="col"><span class="w-sr-only">{% trans "Aksi" %}</span></th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for r in rows %}
-          <tr>
-            <td><code class="iot-table__mono">{{ r.user }}</code></td>
-            <td>{{ r.email }}</td>
-            <td>{{ r.organization }} <span class="w-help">({{ r.org_slug }})</span></td>
-            <td>{{ r.role }}</td>
-            <td>{% if r.edit_href %}<a class="button button-small" href="{{ r.edit_href }}">{% trans "Ubah" %}</a>{% endif %}</td>
-          </tr>
-          {% empty %}
-          <tr><td colspan="5" class="w-help">{% trans "Belum ada keanggotaan." %}</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-      {% if request.user.is_superuser %}<p style="margin:0.75rem 0 0;"><a class="iot-link-quiet" href="{{ snippets.organizationmembership.list }}">{% trans "Buka daftar penuh di Snippet" %}</a></p>{% endif %}
+    <div class="iot-access-summary" aria-label="{% trans 'Ringkasan akses' %}">
+      <span><strong>{{ organization_count }}</strong><small>{% trans "organisasi" %}</small></span><span><strong>{{ active_organization_count }}</strong><small>{% trans "tenant aktif" %}</small></span><span><strong>{{ row_count }}</strong><small>{% trans "akses" %}</small></span><span><strong>{{ admin_membership_count }}</strong><small>{% trans "admin" %}</small></span>
     </div>
+  </header>
+
+  {% if messages %}
+    <ul class="iot-notices" role="status">
+      {% for message in messages %}<li class="{{ message.tags }}">{{ message }}</li>{% endfor %}
+    </ul>
+  {% endif %}
+
+  <div class="iot-access-grid">
+    <section class="iot-panel iot-access-organizations" aria-labelledby="iot-organizations-title">
+      <header class="iot-panel__head">
+        <div><span class="iot-section-kicker">{% trans "Tenants" %}</span><h2 id="iot-organizations-title">{% trans "Organisasi" %}</h2></div>
+        {% if request.user.is_superuser %}<button class="button button-primary" type="button" data-iot-modal-open="iot-create-organization">{% trans "Tambah organisasi" %}</button>{% endif %}
+      </header>
+      <div class="iot-panel-toolbar"><label class="iot-search"><span aria-hidden="true">⌕</span><span class="w-sr-only">{% trans "Cari organisasi" %}</span><input type="search" placeholder="{% trans 'Cari organisasi…' %}" data-iot-org-search></label></div>
+      <div class="iot-organization-list">
+        {% for r in organization_rows %}
+          <article class="iot-organization-row{% if not r.is_active %} is-disabled{% endif %}" data-iot-org-row data-search="{{ r.name|lower }} {{ r.slug|lower }}">
+            <span class="iot-organization-avatar" aria-hidden="true">{{ r.name|slice:":1"|upper }}</span>
+            <div><strong>{{ r.name }}</strong><code>{{ r.slug }}</code></div>
+            <dl><div><dt>{% trans "User" %}</dt><dd>{{ r.num_members }}</dd></div><div><dt>{% trans "Device" %}</dt><dd>{{ r.num_devices }}</dd></div></dl>
+            {% if r.edit_href %}<a class="iot-row-action" href="{{ r.edit_href }}">{% trans "Ubah" %}</a>{% endif %}
+          </article>
+        {% empty %}
+          <div class="iot-empty-state"><strong>{% trans "Belum ada organisasi" %}</strong><p>{% trans "Buat tenant pertama sebelum menambahkan akses user." %}</p></div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="iot-panel iot-access-members" aria-labelledby="iot-members-title">
+      <header class="iot-panel__head">
+        <div><span class="iot-section-kicker">{% trans "Identity & roles" %}</span><h2 id="iot-members-title">{% trans "Akses pengguna" %}</h2></div>
+        {% if request.user.is_superuser %}<button class="button button-primary" type="button" data-iot-modal-open="iot-create-user">{% trans "Tambah akses" %}</button>{% endif %}
+      </header>
+      <div class="iot-panel-toolbar"><label class="iot-search"><span aria-hidden="true">⌕</span><span class="w-sr-only">{% trans "Cari akses pengguna" %}</span><input type="search" placeholder="{% trans 'Cari user, email, atau organisasi…' %}" data-iot-member-search></label><select data-iot-role-filter aria-label="{% trans 'Filter peran' %}"><option value="all">{% trans "Semua peran" %}</option><option value="admin">Admin</option><option value="member">Member</option><option value="viewer">Viewer</option></select></div>
+      <div class="iot-panel__body iot-table-wrap">
+        <table class="iot-table" aria-label="{% trans 'Keanggotaan organisasi' %}">
+          <thead><tr><th>{% trans "Pengguna" %}</th><th>{% trans "Organisasi" %}</th><th>{% trans "Peran" %}</th><th><span class="w-sr-only">{% trans "Aksi" %}</span></th></tr></thead>
+          <tbody>
+            {% for r in rows %}
+              <tr data-iot-member-row data-search="{{ r.user|lower }} {{ r.email|lower }} {{ r.organization|lower }} {{ r.org_slug|lower }}" data-role="{{ r.role_key }}"><td><strong>{{ r.user }}</strong><small class="iot-table-secondary">{{ r.email }}</small></td><td>{{ r.organization }} <code class="iot-table__mono">{{ r.org_slug }}</code></td><td><span class="iot-role-badge iot-role-badge--{{ r.role_key }}">{{ r.role }}</span></td><td>{% if r.edit_href %}<a class="button button-small" href="{{ r.edit_href }}">{% trans "Ubah" %}</a>{% endif %}</td></tr>
+            {% empty %}<tr><td colspan="4" class="w-help">{% trans "Belum ada akses pengguna." %}</td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
   </div>
-</div>
+
+  {% if request.user.is_superuser %}
+    {% include "IoT/admin/_create_modal.html" with create_form=organization_form open_create_modal=open_organization_modal modal_id="iot-create-organization" modal_title="Tambah organisasi" modal_submit_label="Simpan organisasi" modal_action_name="membership_mode" modal_action_value="organization" %}
+    {% include "IoT/admin/_membership_modal.html" %}
+  {% endif %}
+</main>
 {% endblock %}
+
+{% block extra_js %}{% include "IoT/admin/_modal_script.html" %}<script>
+(function(){"use strict";function bind(searchSelector,rowSelector,filterSelector,attr){var search=document.querySelector(searchSelector),filter=filterSelector&&document.querySelector(filterSelector),rows=[].slice.call(document.querySelectorAll(rowSelector));function run(){var q=(search&&search.value||"").trim().toLowerCase(),f=filter&&filter.value||"all";rows.forEach(function(row){row.hidden=!((!q||row.getAttribute("data-search").indexOf(q)!==-1)&&(!filter||f==="all"||row.getAttribute(attr)===f));});}if(search)search.addEventListener("input",run);if(filter)filter.addEventListener("change",run);}bind("[data-iot-org-search]","[data-iot-org-row]");bind("[data-iot-member-search]","[data-iot-member-row]","[data-iot-role-filter]","data-role");})();
+</script>{% endblock %}

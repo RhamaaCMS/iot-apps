@@ -2,8 +2,8 @@
   "schema_version": "1.0.0",
   "name": "IoT",
   "slug": "iot",
-  "version": "2.1.0",
-  "description": "Connected-device domain: profiles, provisioning, credentials, idempotent telemetry, state shadow, commands, audit events, and OTA. Uses base-iot apps.mqtt as transport runtime.",
+  "version": "2.3.0",
+  "description": "Connected-device domain: app-scoped MQTT, auto-registry, profile inference, credentials, telemetry, state, commands, audit, and OTA.",
   "author": "RhamaaCMS",
   "package_name": "IoT",
 
@@ -67,9 +67,9 @@
 
   "mqtt": {
     "app": "apps.mqtt",
-    "topic_prefix": "iot/v1",
-    "uplink": "Handler calls apps.IoT.services.process_incoming_mqtt_message from the mqtt app when messages arrive (configure subscription to iot/v1/# or stricter).",
-    "downlink_ota": "ota_services.publish_ota_command → iot/v1/{org_slug}/{device_id}/down/ota, payload JSON ota_command.v1."
+    "topic_prefix": "iot/v2/{IOT_APP_ID}",
+    "uplink": "Handler validates IOT_APP_ID in both topic and envelope before accepting MQTT uplinks.",
+    "downlink_ota": "ota_services.publish_ota_command → iot/v2/{app_id}/{org_slug}/{device_id}/down/ota, payload JSON ota_command.v1."
   },
 
   "ota": {
@@ -83,6 +83,7 @@
     "models.py": "IoT domain persistence including durable MQTTOutboxMessage. Wagtail registration is separate.",
     "services.py": "Envelope validation and idempotent canonical ingest with separate server/device timestamps.",
     "device_services.py": "Provisioning, credentials, state shadow, and command lifecycle.",
+    "registry_services.py": "Quarantined self-registration, JSON shape inference, profile matching, and approval.",
     "access.py": "Membership-based tenant queryset scoping for IoT admin and APIs.",
     "snippet_viewsets.py": "Superuser-only raw Wagtail snippet CRUD and chooser surfaces.",
     "integrations/mqtt.py": "Transactional MQTT outbox enqueue, retry, stale-lock recovery, and delivery callbacks.",
@@ -127,7 +128,8 @@
     "messages": [
       "Ensure 'apps.IoT' and 'apps.mqtt' are in INSTALLED_APPS; run migrations for app label 'iot' (e.g. python manage.py migrate iot).",
       "OTA route /ota/firmware/ is installed automatically; set IOT_OTA_PUBLIC_BASE when Site domain is not device-reachable.",
-      "IoT registers iot/v1/+/+/up/# automatically when no explicit MQTT topics are configured.",
+      "Set a unique IOT_APP_ID and configure the same value in every device firmware.",
+      "IoT registers iot/v2/{IOT_APP_ID}/+/+/up/# automatically.",
       "Production: run one dedicated `python manage.py mqtt_worker` process.",
       "Wagtail admin: /admin/iot/ — OTA at /admin/iot/ota/.",
       "Define allowed schemas per DeviceProfile; keep docs/protocol.md and firmware contracts synchronized."

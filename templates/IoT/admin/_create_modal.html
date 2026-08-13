@@ -1,0 +1,37 @@
+{% load i18n %}
+<dialog class="iot-dialog" id="{{ modal_id }}"{% if open_create_modal %} data-iot-auto-open{% endif %} aria-labelledby="{{ modal_id }}-title">
+  <div class="iot-dialog__surface">
+    <header class="iot-dialog__head">
+      <div>
+        <span class="iot-section-kicker">{% trans "Quick create" %}</span>
+        <h2 id="{{ modal_id }}-title">{{ modal_title }}</h2>
+      </div>
+      <button class="iot-dialog__close" type="button" data-iot-modal-close aria-label="{% trans 'Tutup panel' %}">×</button>
+    </header>
+    <form method="post"{% if modal_multipart %} enctype="multipart/form-data"{% endif %} class="iot-dialog__form">
+      {% csrf_token %}
+      {% if modal_action_name %}<input type="hidden" name="{{ modal_action_name }}" value="{{ modal_action_value }}">{% endif %}
+      {% if create_form.non_field_errors %}
+        <div class="iot-form-errors" role="alert">{{ create_form.non_field_errors }}</div>
+      {% endif %}
+      <div class="iot-form-grid">
+        {% for field in create_form %}
+          <div class="iot-form-field{% if field.field.widget.input_type == 'checkbox' %} iot-form-field--check{% endif %}">
+            {% if field.field.widget.input_type == 'checkbox' %}
+              {{ field }} <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {% else %}
+              <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+              {{ field }}
+            {% endif %}
+            {% if field.help_text %}<small>{{ field.help_text|safe }}</small>{% endif %}
+            {% if field.errors %}<div class="iot-field-errors" role="alert">{{ field.errors }}</div>{% endif %}
+          </div>
+        {% endfor %}
+      </div>
+      <footer class="iot-dialog__actions">
+        <button type="button" class="button" data-iot-modal-close>{% trans "Batal" %}</button>
+        <button type="submit" class="button button-primary">{{ modal_submit_label }}</button>
+      </footer>
+    </form>
+  </div>
+</dialog>

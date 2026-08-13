@@ -11,6 +11,7 @@ class IotConfig(AppConfig):
         from . import mqtt_handlers  # noqa: F401
         from apps.mqtt.worker_registry import register_default_topic, register_worker_task
         from .integrations.mqtt import run_outbox_loop
+        from .constants import mqtt_subscription_topic
 
         register_worker_task(run_outbox_loop)
-        register_default_topic("iot/v1/+/+/up/#")
+        register_default_topic(mqtt_subscription_topic())

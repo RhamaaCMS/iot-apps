@@ -10,6 +10,11 @@ from django.utils.translation import gettext_lazy as _
 from wagtail.admin.panels import FieldPanel, FieldRowPanel, HelpPanel, MultiFieldPanel
 
 
+def default_device_id():
+    """Legacy/manual device identity; auto-registry uses normalized ESP32 MAC."""
+    return str(uuid.uuid4())
+
+
 class Organization(models.Model):
     """Root tenant; `org` in the MQTT JSON must match `slug` (auto from `name`)."""
 
@@ -30,7 +35,7 @@ class Organization(models.Model):
         max_length=255,
         unique=True,
         blank=True,
-        help_text=_("Dibuat otomatis dari nama. Dipakai di topik MQTT: iot/v1/{slug}/…"),
+        help_text=_("Dibuat otomatis dari nama. Dipakai setelah app_id pada namespace MQTT."),
     )
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(default=timezone.now, editable=False)
@@ -120,6 +125,11 @@ class DeviceProfile(models.Model):
         blank=True,
         help_text=_("Allowed uplink schemas. Empty means any valid schema."),
     )
+    schema_contracts = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=_("Normalized JSON shapes per schema, used for automatic device matching."),
+    )
     heartbeat_interval_seconds = models.PositiveIntegerField(default=300)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(default=timezone.now, editable=False)
@@ -131,6 +141,7 @@ class DeviceProfile(models.Model):
         ),
         FieldPanel("product_code"),
         FieldPanel("allowed_schemas"),
+        FieldPanel("schema_contracts", read_only=True),
         FieldPanel("heartbeat_interval_seconds"),
         FieldPanel("is_active"),
     ]
@@ -141,6 +152,8 @@ class DeviceProfile(models.Model):
             isinstance(value, str) and value.strip() for value in self.allowed_schemas
         ):
             raise ValidationError({"allowed_schemas": _("Must be a list of schema strings.")})
+        if not isinstance(self.schema_contracts, dict):
+            raise ValidationError({"schema_contracts": _("Must be an object keyed by schema.")})
 
     def __str__(self):
         return f"{self.organization.slug}/{self.name}"
@@ -213,17 +226,18 @@ class Device(models.Model):
         blank=True,
     )
     name = models.CharField(max_length=255)
-    device_id = models.UUIDField(
-        default=uuid.uuid4,
+    device_id = models.CharField(
+        max_length=64,
+        default=default_device_id,
         unique=True,
         db_index=True,
-        help_text="Must match the device_id segment in MQTT and in the JSON envelope.",
+        help_text="Auto-registry uses ESP32 STA MAC without separators (AABBCCDDEEFF).",
     )
     is_active = models.BooleanField(default=True)
     topic_prefix = models.CharField(
         max_length=500,
         blank=True,
-        help_text="Optional override; leave empty to use iot/v1/{org_slug}/{device_id}/…",
+        help_text="Optional override inside iot/v2/{app_id}/; leave empty for the canonical namespace.",
     )
     firmware_product = models.CharField(
         max_length=100,
@@ -274,8 +288,23 @@ class Device(models.Model):
 
     def clean(self):
         super().clean()
+        self.device_id = str(self.device_id).strip()
+        if not self.device_id:
+            raise ValidationError({"device_id": _("Device ID is required.")})
         if self.profile_id and self.organization_id != self.profile.organization_id:
             raise ValidationError({"profile": _("Profile must belong to device organization.")})
+        if self.topic_prefix:
+            from .constants import mqtt_topic_root
+
+            if not self.topic_prefix.strip().rstrip("/").startswith(mqtt_topic_root() + "/"):
+                raise ValidationError(
+                    {"topic_prefix": _("Custom topic must remain inside this application's MQTT namespace.")}
+                )
+
+    def save(self, *args, **kwargs):
+        if self.profile_id:
+            self.firmware_product = self.profile.product_code or self.profile.slug
+        super().save(*args, **kwargs)
 
 
 class CredentialStatus(models.TextChoices):
@@ -315,7 +344,12 @@ class ProvisioningToken(models.Model):
         Organization, on_delete=models.CASCADE, related_name="provisioning_tokens"
     )
     profile = models.ForeignKey(
-        DeviceProfile, on_delete=models.PROTECT, related_name="provisioning_tokens"
+        DeviceProfile,
+        on_delete=models.PROTECT,
+        related_name="provisioning_tokens",
+        null=True,
+        blank=True,
+        help_text=_("Optional for auto-registry tokens; profile is inferred from data shape."),
     )
     token_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     secret_hash = models.CharField(max_length=255, editable=False)
@@ -334,6 +368,67 @@ class ProvisioningToken(models.Model):
     @property
     def can_claim(self):
         return self.is_active and self.claim_count < self.max_claims and self.expires_at > timezone.now()
+
+
+class RegistrationStatus(models.TextChoices):
+    PENDING = "pending", _("Pending review")
+    APPROVED = "approved", _("Approved")
+    REJECTED = "rejected", _("Rejected")
+
+
+class DeviceRegistrationRequest(models.Model):
+    """Quarantined self-registration request waiting for operator approval."""
+
+    class Meta:
+        app_label = "iot"
+        ordering = ("-created_at",)
+        constraints = [
+            models.UniqueConstraint(
+                fields=("provisioning_token", "hardware_id"),
+                name="iot_registry_token_hardware_uniq",
+            )
+        ]
+
+    request_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    provisioning_token = models.ForeignKey(
+        ProvisioningToken, on_delete=models.PROTECT, related_name="registration_requests"
+    )
+    organization = models.ForeignKey(
+        Organization, on_delete=models.CASCADE, related_name="registration_requests"
+    )
+    suggested_profile = models.ForeignKey(
+        DeviceProfile,
+        on_delete=models.SET_NULL,
+        related_name="suggested_registrations",
+        null=True,
+        blank=True,
+    )
+    device = models.OneToOneField(
+        Device,
+        on_delete=models.SET_NULL,
+        related_name="registration_request",
+        null=True,
+        blank=True,
+    )
+    credential_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    secret_hash = models.CharField(max_length=255, editable=False)
+    hardware_id = models.CharField(max_length=100)
+    requested_name = models.CharField(max_length=255)
+    hardware_version = models.CharField(max_length=32, blank=True)
+    firmware_product = models.CharField(max_length=100, blank=True)
+    firmware_version = models.CharField(max_length=100, blank=True)
+    schema = models.CharField(max_length=200)
+    sample_data = models.JSONField(default=dict)
+    data_shape = models.JSONField(default=dict, editable=False)
+    status = models.CharField(
+        max_length=20, choices=RegistrationStatus.choices, default=RegistrationStatus.PENDING
+    )
+    rejection_reason = models.TextField(blank=True)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+    reviewed_at = models.DateTimeField(null=True, blank=True, editable=False)
+
+    def __str__(self):
+        return f"{self.requested_name} [{self.status}]"
 
 
 class DeviceState(models.Model):
@@ -518,11 +613,19 @@ class FirmwareVersion(models.Model):
         ordering = ("-created_at",)
         constraints = [
             models.UniqueConstraint(
-                fields=("product", "version"),
-                name="iot_firmware_version_product_version_uniq",
+                fields=("profile", "version"),
+                name="iot_firmware_profile_version_uniq",
             )
         ]
 
+    profile = models.ForeignKey(
+        DeviceProfile,
+        on_delete=models.PROTECT,
+        related_name="firmware_versions",
+        null=True,
+        blank=True,
+        help_text=_("Device profile that owns this firmware version."),
+    )
     product = models.CharField(
         max_length=100,
         default="default",
@@ -584,7 +687,8 @@ class FirmwareVersion(models.Model):
     panels = [
         MultiFieldPanel(
             [
-                FieldPanel("product"),
+                FieldPanel("profile"),
+                FieldPanel("product", read_only=True),
                 FieldPanel("version"),
             ],
             heading="Version Identity",
@@ -649,6 +753,11 @@ class FirmwareVersion(models.Model):
         super().clean()
         from .constants import OTA_MAX_FIRMWARE_BYTES
 
+        if not self.profile_id:
+            raise ValidationError(
+                {"profile": _("Firmware must belong to a device profile.")}
+            )
+
         # Validate file size
         if self.file and hasattr(self.file, "size") and self.file.size:
             if self.file.size > OTA_MAX_FIRMWARE_BYTES:
@@ -699,15 +808,15 @@ class FirmwareVersion(models.Model):
             pass
 
     def save(self, *args, **kwargs) -> None:
+        if self.profile_id:
+            self.product = self.profile.product_code or self.profile.slug
         # Calculate hash and size before saving
         self._calculate_hash_and_size()
         super().save(*args, **kwargs)
 
     def is_compatible_with_device(self, device) -> bool:
         """Check if this firmware version is compatible with a given device."""
-        # Check product match
-        dev_product = (device.firmware_product or "").strip() or "default"
-        if (self.product or "").strip() != dev_product:
+        if not self.profile_id or device.profile_id != self.profile_id:
             return False
 
         # Check hardware version constraints if device has hardware version info

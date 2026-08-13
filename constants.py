@@ -2,12 +2,45 @@
 IoT MQTT / envelope constants — single place for protocol version and topic rules.
 """
 
-# Topic layout: {prefix}/{org_slug}/{device_id}/up/telemetry
+import re
+
+from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
+
+# Topic layout: {prefix}/{app_id}/{org_slug}/{device_id}/up/telemetry
 # (channel is always present in the JSON envelope; use .../up for generic uplink if needed)
-IOT_MQTT_TOPIC_PREFIX = "iot/v1"
+IOT_MQTT_TOPIC_PREFIX = "iot/v2"
+
+IOT_APP_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{2,63}$")
+IOT_APP_ID_PLACEHOLDERS = frozenset({"", "change-me", "replace-me", "your-app-id"})
+
+
+def get_iot_app_id() -> str:
+    """Stable deployment identity shared by the server and its devices."""
+    app_id = str(getattr(settings, "IOT_APP_ID", "")).strip().lower()
+    if app_id in IOT_APP_ID_PLACEHOLDERS or not IOT_APP_ID_PATTERN.fullmatch(app_id):
+        raise ImproperlyConfigured(
+            "IOT_APP_ID must be a unique 3-64 character ID using lowercase "
+            "letters, numbers, '-' or '_'."
+        )
+    return app_id
+
+
+def mqtt_topic_root() -> str:
+    return f"{IOT_MQTT_TOPIC_PREFIX}/{get_iot_app_id()}"
+
+
+def mqtt_subscription_topic() -> str:
+    return f"{mqtt_topic_root()}/+/+/up/#"
+
+
+def build_device_topic(device, direction: str, channel: str) -> str:
+    if direction not in {"up", "down"}:
+        raise ValueError("MQTT direction must be 'up' or 'down'.")
+    return f"{mqtt_topic_root()}/{device.organization.slug}/{device.device_id}/{direction}/{channel.strip('/')}"
 
 # Envelope field "v" must match for strict validation
-ENVELOPE_VERSION = 1
+ENVELOPE_VERSION = 2
 
 # Devices with last_seen within this window are shown as "online" in the admin dashboard
 ONLINE_THRESHOLD_MINUTES = 5
@@ -41,6 +74,7 @@ class ProtocolSpec:
     REQUIRED_ENVELOPE_KEYS = (
         "v",
         "ts",
+        "app_id",
         "org",
         "device_id",
         "channel",

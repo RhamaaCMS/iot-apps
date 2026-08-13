@@ -1,25 +1,49 @@
 import json
 import uuid
-from datetime import UTC
+from datetime import UTC, timedelta
 
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import transaction
 from django.db.models import Count
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.template.response import TemplateResponse
+from django.utils import timezone
 from django.views.decorators.http import require_GET, require_http_methods
 from wagtail.admin.auth import require_admin_access
 from django.contrib import messages
 from . import ota_services
 from . import services
+from . import registry_services
+from .admin_forms import (
+    DeviceForm,
+    DeviceProfileForm,
+    ExistingUserMembershipForm,
+    FirmwareVersionForm,
+    IoTUserMembershipForm,
+    OrganizationForm,
+)
 from .admin_snippet_urls import all_snippet_links, snippet_edit_url
 from .constants import (
     ALLOWED_SCHEMAS,
     ENVELOPE_VERSION,
-    IOT_MQTT_TOPIC_PREFIX,
     ONLINE_THRESHOLD_MINUTES,
+    build_device_topic,
+    get_iot_app_id,
+    mqtt_topic_root,
 )
-from .models import Device, DeviceOTAJob, FirmwareVersion, Organization, OrganizationMembership
+from .models import (
+    Device,
+    DeviceCommand,
+    DeviceOTAJob,
+    DeviceProfile,
+    DeviceRegistrationRequest,
+    FirmwareVersion,
+    Organization,
+    OrganizationMembership,
+    RegistrationStatus,
+    TelemetryRecord,
+)
 from .access import (
     manageable_organization_ids_for_user,
     scope_devices,
@@ -37,6 +61,8 @@ FirmwarePackage = FirmwareVersion
 def _base_iot_context(active_section: str, user=None) -> dict:
     return {
         "iot_active_section": active_section,
+        "iot_app_id": get_iot_app_id(),
+        "iot_topic_root": mqtt_topic_root(),
         "snippets": all_snippet_links(user),
     }
 
@@ -44,24 +70,62 @@ def _base_iot_context(active_section: str, user=None) -> dict:
 @require_admin_access
 def dashboard(request):
     org_count = scope_organizations(Organization.objects.filter(is_active=True), request.user).count()
-    dev_qs = scope_devices(Device.objects.select_related("organization"), request.user)
+    dev_qs = scope_devices(
+        Device.objects.select_related("organization", "profile"), request.user
+    )
+    now = timezone.now()
+    online_cutoff = now - timedelta(minutes=ONLINE_THRESHOLD_MINUTES)
+    activity_cutoff = now - timedelta(hours=24)
     dev_count = dev_qs.count()
-    online = sum(1 for d in dev_qs if services.device_is_online(d))
+    active_count = dev_qs.filter(is_active=True).count()
+    online = dev_qs.filter(
+        is_active=True, last_seen_at__gte=online_cutoff
+    ).count()
+    offline = max(active_count - online, 0)
+    online_percentage = round((online / active_count) * 100) if active_count else 0
+    telemetry_24h = TelemetryRecord.objects.filter(
+        device__in=dev_qs, received_at__gte=activity_cutoff
+    ).count()
+    pending_commands = DeviceCommand.objects.filter(
+        device__in=dev_qs,
+        status__in=("pending", "sent", "acknowledged"),
+    ).count()
+    ota_in_flight = DeviceOTAJob.objects.filter(
+        device__in=dev_qs,
+        status__in=("pending", "sent", "in_progress"),
+    ).count()
+
+    recent_activity = [
+        {
+            "device_name": item.device.name,
+            "org_slug": item.device.organization.slug,
+            "channel": item.channel,
+            "schema": item.schema,
+            "received_at": item.received_at,
+        }
+        for item in TelemetryRecord.objects.filter(device__in=dev_qs)
+        .select_related("device", "device__organization")
+        .order_by("-received_at")[:6]
+    ]
+
     devices = []
     preview_n = 8
-    for d in dev_qs[:preview_n]:
+    for d in dev_qs.order_by("-last_seen_at", "name")[:preview_n]:
         devices.append(
             {
+                "pk": d.pk,
                 "name": d.name,
                 "org_slug": d.organization.slug,
                 "device_id": str(d.device_id),
-                "last_seen": d.last_seen_at.isoformat() if d.last_seen_at else None,
-                "online": services.device_is_online(d),
+                "last_seen": d.last_seen_at,
+                "online": d.is_active and services.device_is_online(d),
+                "is_active": d.is_active,
                 "last_channel": d.last_channel or "—",
                 "last_schema": d.last_schema or "—",
+                "firmware_version": d.reported_firmware_version or "—",
+                "hardware_version": d.hardware_version or "—",
             }
         )
-    from django.utils import timezone
 
     return TemplateResponse(
         request,
@@ -70,16 +134,23 @@ def dashboard(request):
             "title": "IoT",
             "org_count": org_count,
             "device_count": dev_count,
+            "active_device_count": active_count,
             "online_count": online,
+            "offline_count": offline,
+            "online_percentage": online_percentage,
+            "telemetry_24h": telemetry_24h,
+            "pending_commands": pending_commands,
+            "ota_in_flight": ota_in_flight,
+            "recent_activity": recent_activity,
             "online_threshold_minutes": ONLINE_THRESHOLD_MINUTES,
             "devices": devices,
             "devices_preview_limit": preview_n,
             "has_more_devices": dev_count > preview_n,
             "envelope_version": ENVELOPE_VERSION,
-            "topic_prefix": IOT_MQTT_TOPIC_PREFIX,
+            "topic_prefix": mqtt_topic_root(),
             "allowed_schemas": list(ALLOWED_SCHEMAS),
-            "example_telemetry_topic": f"{IOT_MQTT_TOPIC_PREFIX}/kirei/550e8400-e29b-41d4-a716-446655440000/up/telemetry",
-            "now_iso": timezone.now().astimezone(UTC).isoformat().replace("+00:00", "Z"),
+            "example_telemetry_topic": f"{mqtt_topic_root()}/kirei/550e8400-e29b-41d4-a716-446655440000/up/telemetry",
+            "now_iso": now.astimezone(UTC).isoformat().replace("+00:00", "Z"),
             **_base_iot_context("summary", request.user),
         },
     )
@@ -87,36 +158,70 @@ def dashboard(request):
 
 @require_admin_access
 def panel_organizations(request):
-    orgs = (
-        scope_organizations(Organization.objects.all(), request.user).annotate(_num_devices=Count("devices", distinct=True))
-        .order_by("name")
-    )
-    rows = []
-    for o in orgs:
-        rows.append(
-            {
-                "pk": o.pk,
-                "name": o.name,
-                "slug": o.slug,
-                "is_active": o.is_active,
-                "num_devices": o._num_devices,
-                "edit_href": snippet_edit_url("organization", o.pk) if request.user.is_superuser else None,
-            }
-        )
-    return TemplateResponse(
-        request,
-        "IoT/admin/panel_organizations.html",
-        {
-            "title": "Organisasi — IoT",
-            "rows": rows,
-            "row_count": len(rows),
-            **_base_iot_context("organizations", request.user),
-        },
-    )
+    return redirect("iot:panel_memberships")
 
 
 @require_admin_access
+@require_http_methods(["GET", "POST"])
 def panel_memberships(request):
+    mode = (request.POST.get("membership_mode") or "new") if request.method == "POST" else "new"
+    if mode not in {"new", "existing", "organization"}:
+        mode = "new"
+    new_user_form = IoTUserMembershipForm(
+        request.POST if request.method == "POST" and mode == "new" else None,
+        prefix="new",
+    )
+    existing_user_form = ExistingUserMembershipForm(
+        request.POST if request.method == "POST" and mode == "existing" else None,
+        prefix="existing",
+    )
+    organization_form = OrganizationForm(
+        request.POST if request.method == "POST" and mode == "organization" else None,
+        prefix="organization",
+    )
+    if request.method == "POST":
+        if not request.user.is_superuser:
+            raise PermissionDenied
+        if mode == "new" and new_user_form.is_valid():
+            with transaction.atomic():
+                user = new_user_form.save()
+            messages.success(request, f"User {user.get_username()} dan akses IoT berhasil dibuat.")
+            return redirect("iot:panel_memberships")
+        if mode == "existing" and existing_user_form.is_valid():
+            membership = existing_user_form.save()
+            messages.success(
+                request,
+                f"User {membership.user.get_username()} berhasil ditambahkan ke {membership.organization.name}.",
+            )
+            return redirect("iot:panel_memberships")
+        if mode == "organization" and organization_form.is_valid():
+            organization = organization_form.save()
+            messages.success(request, f"Organisasi {organization.name} berhasil dibuat.")
+            return redirect("iot:panel_memberships")
+
+    organizations = (
+        scope_organizations(Organization.objects.all(), request.user)
+        .annotate(
+            _num_devices=Count("devices", distinct=True),
+            _num_members=Count("memberships", distinct=True),
+        )
+        .order_by("name")
+    )
+    organization_rows = [
+        {
+            "pk": organization.pk,
+            "name": organization.name,
+            "slug": organization.slug,
+            "is_active": organization.is_active,
+            "num_devices": organization._num_devices,
+            "num_members": organization._num_members,
+            "edit_href": snippet_edit_url("organization", organization.pk)
+            if request.user.is_superuser
+            else None,
+        }
+        for organization in organizations
+    ]
+
     q = scope_memberships(OrganizationMembership.objects.select_related(
         "user", "organization"
     ), request.user).order_by("organization__name", "user__email")
@@ -130,6 +235,7 @@ def panel_memberships(request):
                 "organization": m.organization.name,
                 "org_slug": m.organization.slug,
                 "role": m.get_role_display(),
+                "role_key": m.role,
                 "edit_href": snippet_edit_url("organizationmembership", m.pk) if request.user.is_superuser else None,
             }
         )
@@ -140,44 +246,225 @@ def panel_memberships(request):
             "title": "Pengguna & organisasi — IoT",
             "rows": rows,
             "row_count": len(rows),
+            "new_user_form": new_user_form,
+            "existing_user_form": existing_user_form,
+            "organization_form": organization_form,
+            "organization_rows": organization_rows,
+            "organization_count": len(organization_rows),
+            "active_organization_count": sum(1 for row in organization_rows if row["is_active"]),
+            "admin_membership_count": sum(1 for row in rows if row["role_key"] == "admin"),
+            "membership_mode": mode,
+            "open_membership_modal": request.method == "POST" and mode in {"new", "existing"},
+            "open_organization_modal": request.method == "POST" and mode == "organization",
             **_base_iot_context("memberships", request.user),
         },
     )
 
 
 @require_admin_access
+@require_http_methods(["GET", "POST"])
 def panel_devices(request):
-    dev_qs = scope_devices(Device.objects.select_related("organization"), request.user).order_by(
+    form = DeviceForm(request.POST or None)
+    if request.method == "POST":
+        if not request.user.is_superuser:
+            raise PermissionDenied
+        if form.is_valid():
+            device = form.save()
+            messages.success(request, f"Perangkat {device.name} berhasil dibuat.")
+            return redirect("iot:panel_devices")
+
+    dev_qs = scope_devices(Device.objects.select_related("organization", "profile"), request.user).order_by(
         "organization__name", "name"
     )
     rows = []
     for d in dev_qs:
-        rows.append(
-            {
-                "pk": d.pk,
-                "name": d.name,
-                "org_slug": d.organization.slug,
-                "org_name": d.organization.name,
-                "device_id": str(d.device_id),
-                "firmware_product": d.firmware_product,
-                "is_active": d.is_active,
-                "online": services.device_is_online(d),
-                "last_seen": d.last_seen_at,
-                "last_channel": d.last_channel or "—",
-                "last_schema": d.last_schema or "—",
-                "edit_href": snippet_edit_url("device", d.pk) if request.user.is_superuser else None,
-                "topic_filter_prefix": services.device_mqtt_message_topic_prefix(d),
-            }
+        rows.append({
+            "pk": d.pk, "name": d.name,
+            "org_slug": d.organization.slug, "org_name": d.organization.name,
+            "device_id": str(d.device_id),
+            "profile": d.profile.name if d.profile_id else "—",
+            "firmware_product": d.firmware_product,
+            "is_active": d.is_active,
+            "online": d.is_active and services.device_is_online(d),
+            "last_seen": d.last_seen_at,
+            "last_channel": d.last_channel or "—", "last_schema": d.last_schema or "—",
+            "edit_href": snippet_edit_url("device", d.pk) if request.user.is_superuser else None,
+            "topic_filter_prefix": services.device_mqtt_message_topic_prefix(d),
+        })
+    return TemplateResponse(request, "IoT/admin/panel_devices.html", {
+        "title": "Perangkat — IoT", "rows": rows, "row_count": len(rows),
+        "online_count": sum(1 for row in rows if row["online"]),
+        "inactive_count": sum(1 for row in rows if not row["is_active"]),
+        "profiled_count": sum(1 for row in rows if row["profile"] != "—"),
+        "online_threshold_minutes": ONLINE_THRESHOLD_MINUTES,
+        "create_form": form, "open_create_modal": request.method == "POST" and form.errors,
+        **_base_iot_context("devices", request.user),
+    })
+
+
+@require_admin_access
+@require_http_methods(["GET", "POST"])
+def panel_registrations(request):
+    if request.method == "POST":
+        if not request.user.is_superuser:
+            raise PermissionDenied
+        registration = get_object_or_404(
+            DeviceRegistrationRequest.objects.select_related("organization", "suggested_profile"),
+            pk=request.POST.get("registration_id"),
         )
+        action = request.POST.get("registry_action")
+        try:
+            if action == "approve":
+                device = registry_services.approve_registration(
+                    registration, profile_name=request.POST.get("profile_name", "")
+                )
+                messages.success(request, f"{device.name} terdaftar dan siap terhubung.")
+            elif action == "reject":
+                registry_services.reject_registration(
+                    registration, request.POST.get("reason", "")
+                )
+                messages.success(request, "Permintaan registrasi ditolak.")
+            else:
+                raise ValidationError("Aksi registrasi tidak dikenal.")
+        except ValidationError as exc:
+            messages.error(request, exc.messages[0])
+        return redirect("iot:panel_registrations")
+
+    allowed_orgs = scope_organizations(Organization.objects.all(), request.user)
+    registrations = DeviceRegistrationRequest.objects.filter(
+        organization__in=allowed_orgs
+    ).select_related("organization", "suggested_profile", "device").order_by(
+        "status", "-created_at"
+    )[:200]
+    rows = [
+        {
+            "pk": item.pk,
+            "request_id": str(item.request_id),
+            "name": item.requested_name,
+            "hardware_id": item.hardware_id,
+            "organization": item.organization.name,
+            "org_slug": item.organization.slug,
+            "schema": item.schema,
+            "product": item.firmware_product or "—",
+            "hardware_version": item.hardware_version or "—",
+            "firmware_version": item.firmware_version or "—",
+            "shape": json.dumps(item.data_shape, ensure_ascii=False, indent=2),
+            "suggested_profile": item.suggested_profile,
+            "status": item.status,
+            "status_label": item.get_status_display(),
+            "device": item.device,
+            "created_at": item.created_at,
+        }
+        for item in registrations
+    ]
     return TemplateResponse(
         request,
-        "IoT/admin/panel_devices.html",
+        "IoT/admin/panel_registrations.html",
         {
-            "title": "Perangkat — IoT",
+            "title": "Registrasi perangkat — IoT",
+            "rows": rows,
+            "pending_count": sum(1 for row in rows if row["status"] == RegistrationStatus.PENDING),
+            **_base_iot_context("registrations", request.user),
+        },
+    )
+@require_admin_access
+@require_http_methods(["GET", "POST"])
+def panel_profiles(request):
+    form = DeviceProfileForm(request.POST or None)
+    if request.method == "POST":
+        if not request.user.is_superuser:
+            raise PermissionDenied
+        if form.is_valid():
+            profile = form.save()
+            messages.success(request, f"Device profile {profile.name} berhasil dibuat.")
+            return redirect("iot:panel_profiles")
+
+    profiles = DeviceProfile.objects.select_related("organization").annotate(
+        _num_devices=Count("devices", distinct=True)
+    )
+    allowed_org_ids = scope_organizations(
+        Organization.objects.all(), request.user
+    ).values_list("pk", flat=True)
+    profiles = profiles.filter(organization_id__in=allowed_org_ids).order_by(
+        "organization__name", "name"
+    )
+    rows = [
+        {
+            "pk": profile.pk,
+            "name": profile.name,
+            "slug": profile.slug,
+            "organization": profile.organization.name,
+            "org_slug": profile.organization.slug,
+            "product_code": profile.product_code or "—",
+            "heartbeat": profile.heartbeat_interval_seconds,
+            "is_active": profile.is_active,
+            "num_devices": profile._num_devices,
+            "edit_href": snippet_edit_url("deviceprofile", profile.pk)
+            if request.user.is_superuser
+            else None,
+        }
+        for profile in profiles
+    ]
+    return TemplateResponse(
+        request,
+        "IoT/admin/panel_profiles.html",
+        {
+            "title": "Device Profiles — IoT",
             "rows": rows,
             "row_count": len(rows),
-            "online_threshold_minutes": ONLINE_THRESHOLD_MINUTES,
-            **_base_iot_context("devices", request.user),
+            "create_form": form,
+            "open_create_modal": request.method == "POST" and form.errors,
+            **_base_iot_context("profiles", request.user),
+        },
+    )
+
+
+@require_admin_access
+@require_http_methods(["GET", "POST"])
+def panel_firmware(request):
+    form = FirmwareVersionForm(request.POST or None, request.FILES or None)
+    if request.method == "POST":
+        if not request.user.is_superuser:
+            raise PermissionDenied
+        if form.is_valid():
+            firmware = form.save(commit=False)
+            firmware.created_by = request.user
+            firmware.save()
+            messages.success(request, f"Firmware {firmware} berhasil diunggah.")
+            return redirect("iot:panel_firmware")
+
+    firmware_versions = FirmwareVersion.objects.select_related(
+        "created_by", "profile", "profile__organization"
+    ).order_by("-created_at")[:200]
+    rows = [
+        {
+            "pk": firmware.pk,
+            "product": firmware.product,
+            "profile": firmware.profile.name if firmware.profile_id else "Legacy / unmapped",
+            "profile_slug": firmware.profile.slug if firmware.profile_id else "—",
+            "version": firmware.version,
+            "file_size": firmware.file_size,
+            "sha256": firmware.sha256,
+            "is_active": firmware.is_active,
+            "is_mandatory": firmware.is_mandatory,
+            "created": firmware.created_at,
+            "created_by": firmware.created_by,
+            "edit_href": snippet_edit_url("firmwareversion", firmware.pk)
+            if request.user.is_superuser
+            else None,
+        }
+        for firmware in firmware_versions
+    ]
+    return TemplateResponse(
+        request,
+        "IoT/admin/panel_firmware.html",
+        {
+            "title": "Firmware — IoT",
+            "rows": rows,
+            "row_count": len(rows),
+            "create_form": form,
+            "open_create_modal": request.method == "POST" and form.errors,
+            **_base_iot_context("firmware", request.user),
         },
     )
 
@@ -279,7 +566,7 @@ def panel_ota(request):
                 "status_key": j.status,
                 "created": j.created_at,
                 "edit_href": snippet_edit_url("deviceotajob", j.pk) if request.user.is_superuser else None,
-                "downlink_topic": f"{IOT_MQTT_TOPIC_PREFIX}/{slug}/{did}/down/ota",
+                "downlink_topic": build_device_topic(j.device, "down", "ota"),
                 "can_manage": manageable_ids is None or j.device.organization_id in manageable_ids,
             }
         )
@@ -287,18 +574,22 @@ def panel_ota(request):
     dev_opts = [
         {
             "pk": d.pk,
-            "label": f"{d.organization.slug} / {d.name} [product={d.firmware_product}] ({d.device_id})",
+            "profile_pk": d.profile_id or "",
+            "label": f"{d.organization.slug} / {d.name} [profile={d.profile or 'none'}] ({d.device_id})",
         }
-        for d in scope_manageable_devices(Device.objects.select_related("organization"), request.user).order_by(
+        for d in scope_manageable_devices(Device.objects.select_related("organization", "profile"), request.user).order_by(
             "organization__name", "name"
         )[:2000]
     ]
     fw_opts = [
         {
             "pk": f.pk,
-            "label": f"{f.product} @ {f.version} (active={f.is_active})",
+            "profile_pk": f.profile_id or "",
+            "label": f"{f.profile or 'Legacy / unmapped'} @ {f.version}",
         }
-        for f in FirmwarePackage.objects.filter(is_active=True).order_by("-created_at")[:2000]
+        for f in FirmwarePackage.objects.filter(is_active=True, profile__isnull=False)
+        .select_related("profile", "profile__organization")
+        .order_by("profile__name", "-created_at")[:2000]
     ]
     ota_base = ota_services.get_ota_public_base_url()
 

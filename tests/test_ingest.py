@@ -22,8 +22,9 @@ class IoTIngestTests(TestCase):
 
     def envelope(self, **changes):
         body = {
-            "v": 1,
+            "v": 2,
             "ts": "2026-01-01T00:00:00Z",
+            "app_id": "iot-dev-local",
             "org": self.org.slug,
             "device_id": str(self.device.device_id),
             "channel": "telemetry",
@@ -36,7 +37,7 @@ class IoTIngestTests(TestCase):
 
     @property
     def topic(self):
-        return f"iot/v1/{self.org.slug}/{self.device.device_id}/up/telemetry"
+        return f"iot/v2/iot-dev-local/{self.org.slug}/{self.device.device_id}/up/telemetry"
 
     def test_ingest_uses_server_time_and_keeps_device_time(self):
         before = timezone.now()
@@ -54,4 +55,14 @@ class IoTIngestTests(TestCase):
     def test_profile_rejects_unknown_schema(self):
         result = process_incoming_mqtt_message(self.topic, self.envelope(schema="unknown.v1"))
         self.assertEqual(result, "error: schema not allowed by device profile")
+        self.assertFalse(TelemetryRecord.objects.exists())
+
+    def test_rejects_foreign_app_id_in_topic(self):
+        topic = self.topic.replace("/iot-dev-local/", "/foreign-app/")
+        self.assertEqual(process_incoming_mqtt_message(topic, self.envelope()), "skip: not current IoT app namespace")
+        self.assertFalse(TelemetryRecord.objects.exists())
+
+    def test_rejects_foreign_app_id_in_envelope(self):
+        result = process_incoming_mqtt_message(self.topic, self.envelope(app_id="foreign-app"))
+        self.assertEqual(result, "error: app_id mismatch")
         self.assertFalse(TelemetryRecord.objects.exists())

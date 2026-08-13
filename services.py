@@ -10,7 +10,6 @@ import json
 import logging
 from datetime import datetime
 from typing import Any, Optional, cast
-from uuid import UUID
 
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import IntegrityError, transaction
@@ -25,6 +24,8 @@ from .constants import (
     COMMAND_SCHEMA_STATUS,
     STATE_SCHEMA_REPORTED,
     ProtocolSpec,
+    get_iot_app_id,
+    mqtt_topic_root,
 )
 from .signals import device_uplink_ingested, telemetry_recorded
 
@@ -46,18 +47,18 @@ def device_is_online(d) -> bool:
 
 
 def build_topic_uplink_telemetry(org_slug: str, device_id: str) -> str:
-    return f"{IOT_MQTT_TOPIC_PREFIX}/{org_slug}/{device_id}/up/telemetry"
+    return f"{mqtt_topic_root()}/{org_slug}/{device_id}/up/telemetry"
 
 
 def device_mqtt_message_topic_prefix(d) -> str:
     """
     `topic` prefix to match `MQTTMessage` rows in apps.mqtt for this device
-    (default: iot/v1/{org_slug}/{device_id}/, or custom `device.topic_prefix`).
+    (default: iot/v2/{app_id}/{org_slug}/{device_id}/, or namespaced custom prefix).
     """
     t = (getattr(d, "topic_prefix", None) or "").strip()
-    if t:
+    if t and t.rstrip("/").startswith(mqtt_topic_root() + "/"):
         return t.rstrip("/") + "/"
-    return f"{IOT_MQTT_TOPIC_PREFIX}/{d.organization.slug}/{d.device_id}/"
+    return f"{mqtt_topic_root()}/{d.organization.slug}/{d.device_id}/"
 
 
 def recent_mqtt_messages_for_device(d, *, limit: int = 50) -> tuple[str, list[dict[str, Any]]]:
@@ -86,21 +87,22 @@ def recent_mqtt_messages_for_device(d, *, limit: int = 50) -> tuple[str, list[di
 
 def parse_iot_uplink_topic(topic: str) -> dict[str, str] | None:
     """
-    Uplink: {IOT_MQTT_TOPIC_PREFIX}/{org_slug}/{device_id}/up[/...]
+    Uplink: {IOT_MQTT_TOPIC_PREFIX}/{app_id}/{org_slug}/{device_id}/up[/...]
     """
     pfx = [p for p in IOT_MQTT_TOPIC_PREFIX.strip("/").split("/") if p]
     parts = [p for p in topic.split("/") if p]
-    if len(parts) < len(pfx) + 3:
+    if len(parts) < len(pfx) + 4:
         return None
     for i, seg in enumerate(pfx):
         if parts[i] != seg:
             return None
     j = len(pfx)
-    if parts[j + 2] != "up":
+    if parts[j] != get_iot_app_id() or parts[j + 3] != "up":
         return None
     return {
-        "org_slug": parts[j],
-        "device_id": parts[j + 1],
+        "app_id": parts[j],
+        "org_slug": parts[j + 1],
+        "device_id": parts[j + 2],
         "raw_topic": topic,
     }
 
@@ -113,9 +115,11 @@ def parse_envelope_dict(raw: dict[str, Any]) -> dict[str, Any]:
         raise EnvelopeError(
             f"Unsupported envelope v={raw.get('v')!r}; need {ENVELOPE_VERSION}"
         )
-    for k in ("org", "device_id", "channel", "schema"):
+    for k in ("app_id", "org", "device_id", "channel", "schema"):
         if not isinstance(raw.get(k), str) or not str(raw.get(k, "")).strip():
             raise EnvelopeError(f"Invalid or empty string field: {k}")
+    if raw["app_id"].strip() != get_iot_app_id():
+        raise EnvelopeError("app_id mismatch")
     if not isinstance(raw.get("data"), dict):
         raise EnvelopeError('Field "data" must be a JSON object')
     if "msg_id" in raw and raw["msg_id"] is not None:
@@ -170,31 +174,31 @@ def validate_envelope(
 def _get_device_by_uuid(s: str):
     from .models import Device
 
+    identity = str(s).strip()
+    if not identity or len(identity) > 64:
+        raise EnvelopeError("device_id is invalid")
     try:
-        u = UUID(s.strip(), version=None)
-    except (ValueError, TypeError) as e:
-        raise EnvelopeError("device_id is not a valid UUID") from e
-    try:
-        return Device.objects.select_related("organization").get(device_id=u)
+        return Device.objects.select_related("organization").get(device_id=identity)
     except ObjectDoesNotExist as e:
         raise EnvelopeError("Unknown device_id") from e
 
 
 def process_incoming_mqtt_message(topic: str, payload: str) -> str:
     tnorm = (topic or "").strip()
-    if not tnorm.startswith(f"{IOT_MQTT_TOPIC_PREFIX}/"):
-        return "skip: not iot/v1"
+    if not tnorm.startswith(f"{mqtt_topic_root()}/"):
+        return "skip: not current IoT app namespace"
     tinfo = parse_iot_uplink_topic(tnorm)
     if not tinfo:
-        return "error: topic pattern (expected iot/v1/{org}/{device_id}/up/...)"
+        return "error: topic pattern (expected iot/v2/{app_id}/{org}/{device_id}/up/...)"
     env, err = validate_envelope(payload)
     if err or not env:
         return f"error: {err}"
     if (
-        tinfo["org_slug"] != env["org"].strip()
+        tinfo["app_id"] != env["app_id"].strip()
+        or tinfo["org_slug"] != env["org"].strip()
         or tinfo["device_id"] != env["device_id"].strip()
     ):
-        return "error: topic and envelope org/device mismatch"
+        return "error: topic and envelope app/org/device mismatch"
 
     if env.get("channel", "").lower() in ("ack", "nack"):
         return "skip: ack channel"

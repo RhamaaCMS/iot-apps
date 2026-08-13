@@ -23,7 +23,13 @@ CLI adds `apps.IoT`, public/provisioning URLs, `/ota/firmware/`, environment def
 - MQTT outbox: database-backed at-least-once downlink delivery with retry and stale-lock recovery.
 - Raw Wagtail snippet CRUD/choosers: superuser-only; tenant users use scoped IoT panels.
 
-Provisioning: `POST /IoT/api/v1/provision/` with `{"token":"<id>.<secret>","name":"Device name","hardware_version":"rev1"}`. Returned credential appears once.
+Provisioning: `POST /IoT/api/v1/provision/` with `{"app_id":"factory-jakarta","token":"<id>.<secret>","name":"Device name","hardware_version":"rev1"}`. `app_id` must match the server; the returned credential appears once.
+
+Auto-registry uses a profile-less bootstrap token and one endpoint:
+`POST /IoT/api/v2/registry/`. ESP32 STA MAC becomes `device_id`. The transaction
+reuses an exact schema-shape profile or creates one, registers the device, and
+returns its credential immediately. Repeating the same MAC/token/secret is
+idempotent.
 
 Create bootstrap token:
 
@@ -44,8 +50,8 @@ Run `python manage.py mqtt_worker` as dedicated base-iot process. `Apps/IoT` reg
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  MQTT Broker (project-managed, e.g. localhost)              │
-│  ─ Topics: iot/v1/{org}/{device}/up/telemetry               │
-│  ─ Downlink: iot/v1/{org}/{device}/down/ota                 │
+│  ─ Topics: iot/v2/{app_id}/{org}/{device}/up/telemetry      │
+│  ─ Downlink: iot/v2/{app_id}/{org}/{device}/down/ota        │
 └──────────────────────┬──────────────────────────────────────┘
                        │  aiomqtt (async)
                        ▼
@@ -63,7 +69,7 @@ Run `python manage.py mqtt_worker` as dedicated base-iot process. `Apps/IoT` reg
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  IoT Services  (apps.IoT.services)                          │
-│  ─ parse_iot_uplink_topic() → org_slug, device_id           │
+│  ─ parse_iot_uplink_topic() → app_id, org_slug, device_id   │
 │  ─ validate_envelope() → v1 envelope validation             │
 │  ─ process_incoming_mqtt_message() → device update + signals  │
 │  ─ device_is_online() → last_seen threshold check           │
@@ -134,14 +140,15 @@ IOT_OTA_PUBLIC_BASE=https://api.example.com   # Optional; public origin for OTA 
 
 No dedicated settings model — all configuration is via:
 - **Organization** Snippets — tenant slug must match MQTT envelope `org` field
-- **Device** Snippets — `device_id` UUID, `firmware_product` for OTA compatibility
-- **FirmwareVersion** Snippets — binary upload, product+version unique constraint
+- **Device Profile** — owns the product contract and firmware lineage
+- **Device** — physical unit linked to one Device Profile
+- **FirmwareVersion** — binary upload owned by one Device Profile
 
 ---
 
 ## Wagtail Admin Dashboards
 
-Access at **Wagtail Admin → IoT** (sidebar submenu with 6 items).
+Access at **Wagtail Admin → IoT**. Profiles, fleet, firmware, and OTA live inside the **Perangkat** workspace.
 
 ### Ringkasan
 
@@ -166,14 +173,15 @@ Table of organization memberships with:
 ### Perangkat
 
 Table of all devices with:
-- Name, organization, device_id UUID, firmware_product
+- Name, organization, device profile, and device_id UUID
 - Online/offline status, last seen, last channel/schema
 - Edit links + MQTT topic prefix for message filtering
 
 ### Firmware Versions
 
-Managed as Wagtail Snippets. Each firmware version includes:
-- **Product** SKU (must match `Device.firmware_product`)
+Managed in the Perangkat workspace. Each firmware version includes:
+- **Device Profile** ownership (OTA is limited to devices with this exact profile)
+- **Product** SKU derived from the profile for protocol compatibility
 - **Version** (semantic, e.g., `1.4.0`)
 - **Binary file** (.bin, .elf, .hex, .fw, .img)
 - **SHA256** and file size (auto-calculated on save)
@@ -246,8 +254,8 @@ from apps.IoT.models import Device
 
 device = Device.objects.create(
     organization=org,
+    profile=profile,
     name="Panel A1",
-    firmware_product="solar-controller-v2",
     hardware_version="rev2",
 )
 ```
@@ -261,7 +269,8 @@ Fields:
 | `device_id` | UUIDField | Auto-generated; must match MQTT envelope |
 | `is_active` | BooleanField | Default `True` |
 | `topic_prefix` | CharField(500) | Optional override for MQTT topic prefix |
-| `firmware_product` | CharField(100) | Must match `FirmwareVersion.product` for OTA |
+| `profile` | FK → DeviceProfile | Firmware and OTA ownership boundary |
+| `firmware_product` | CharField(100) | Compatibility mirror derived from the profile |
 | `hardware_version` | CharField(32) | For firmware compatibility checks |
 | `reported_firmware_version` | CharField(100) | Set after successful OTA |
 | `last_seen_at` | DateTimeField | Updated on every valid uplink |
@@ -331,14 +340,14 @@ Main ingress handler. Called by `mqtt_handlers.on_mqtt_incoming` when an MQTT me
 from apps.IoT.services import process_incoming_mqtt_message
 
 result = process_incoming_mqtt_message(
-    topic="iot/v1/kirei/550e8400-e29b-41d4-a716-446655440000/up/telemetry",
-    payload='{"v":1,"ts":"2026-05-12T10:00:00Z","org":"kirei","device_id":"550e8400-...","channel":"telemetry","schema":"solar_telemetry.v1","data":{"power_w":4500}}'
+    topic="iot/v2/factory-jakarta/kirei/550e8400-e29b-41d4-a716-446655440000/up/telemetry",
+    payload='{"v":2,"ts":"2026-05-12T10:00:00Z","app_id":"factory-jakarta","org":"kirei","device_id":"550e8400-...","channel":"telemetry","schema":"solar_telemetry.v1","data":{"power_w":4500}}'
 )
-# Returns: "ok", "skip: not iot/v1", "error: ..."
+# Returns: "ok", "skip: not current IoT app namespace", "error: ..."
 ```
 
 Steps performed:
-1. Parse topic → `org_slug`, `device_id`
+1. Parse topic → `app_id`, `org_slug`, `device_id`
 2. Validate JSON envelope (required keys, version, schema whitelist)
 3. Match topic org/device with envelope org/device
 4. Look up device by UUID, verify active status
@@ -389,7 +398,7 @@ Create a new OTA job, superseding any in-flight jobs for the same device.
 from apps.IoT.ota_services import create_ota_job
 
 job = create_ota_job(device, firmware)
-# Validates: device active, firmware active+hashed, product match, HW version compatible
+# Validates: device active, exact profile ownership, firmware active+hashed, HW compatibility
 # Auto-cancels other pending/sent/in_progress jobs for this device
 ```
 
@@ -401,7 +410,7 @@ Publish the OTA downlink via MQTT. Job must be `pending`.
 from apps.IoT.ota_services import publish_ota_command
 
 publish_ota_command(job)
-# Builds signed download URL → MQTT publish on iot/v1/{org}/{device}/down/ota
+# Builds signed download URL → MQTT publish on iot/v2/{app_id}/{org}/{device}/down/ota
 # Updates job status to SENT
 ```
 
@@ -452,16 +461,16 @@ All MQTT payloads must be UTF-8 JSON objects with these required fields:
 
 **Uplink:**
 ```
-iot/v1/{org_slug}/{device_id}/up/telemetry
-iot/v1/{org_slug}/{device_id}/up/heartbeat
-iot/v1/{org_slug}/{device_id}/up/ota
+iot/v2/{app_id}/{org_slug}/{device_id}/up/telemetry
+iot/v2/{app_id}/{org_slug}/{device_id}/up/heartbeat
+iot/v2/{app_id}/{org_slug}/{device_id}/up/ota
 ```
 
 **Downlink:**
 ```
-iot/v1/{org_slug}/{device_id}/down/ota
-iot/v1/{org_slug}/{device_id}/down/state
-iot/v1/{org_slug}/{device_id}/down/command
+iot/v2/{app_id}/{org_slug}/{device_id}/down/ota
+iot/v2/{app_id}/{org_slug}/{device_id}/down/state
+iot/v2/{app_id}/{org_slug}/{device_id}/down/command
 ```
 
 ### Allowed Schemas
@@ -472,9 +481,10 @@ Global `constants.ALLOWED_SCHEMAS` is empty by default. Define reusable protocol
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "msg_id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
   "ts": "2026-05-12T10:00:00.000Z",
+  "app_id": "factory-jakarta",
   "org": "kirei",
   "device_id": "550e8400-e29b-41d4-a716-446655440000",
   "channel": "telemetry",

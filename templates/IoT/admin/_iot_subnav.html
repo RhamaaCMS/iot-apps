@@ -1,20 +1,20 @@
 {% load i18n %}
 <nav class="iot-subnav" aria-label="{% trans "Navigasi IoT" %}">
+  <a class="iot-workspace-brand" href="{% url 'iot:dashboard' %}" aria-label="{% trans 'IoT Command Center' %}">
+    <span class="iot-workspace-brand__mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.5"/><circle cx="5" cy="7" r="1.5"/><circle cx="19" cy="6" r="1.5"/><circle cx="19" cy="18" r="1.5"/><path d="m7 8.2 3.1 2.2M14 10.2l3.5-3M14 13.4l3.6 3.2"/></svg>
+    </span>
+    <span><strong>Rhamaa IoT</strong><small title="{% trans 'ID aplikasi MQTT' %}">{{ iot_app_id }}</small></span>
+  </a>
   <ul class="iot-subnav__list" role="list">
     <li class="iot-subnav__item">
-      <a href="{% url 'iot:dashboard' %}" class="button button-small{% if iot_active_section == 'summary' %} iot-nav--active{% endif %}">{% trans "Ringkasan" %}</a>
+      <a href="{% url 'iot:dashboard' %}" class="button button-small{% if iot_active_section == 'summary' %} iot-nav--active{% endif %}"{% if iot_active_section == 'summary' %} aria-current="page"{% endif %}>{% trans "Ringkasan" %}</a>
     </li>
     <li class="iot-subnav__item">
-      <a href="{% url 'iot:panel_organizations' %}" class="button button-small{% if iot_active_section == 'organizations' %} iot-nav--active{% endif %}">{% trans "Organisasi" %}</a>
+      <a href="{% url 'iot:panel_memberships' %}" class="button button-small{% if iot_active_section == 'memberships' or iot_active_section == 'organizations' %} iot-nav--active{% endif %}"{% if iot_active_section == 'memberships' or iot_active_section == 'organizations' %} aria-current="page"{% endif %}>{% trans "Pengguna & organisasi" %}</a>
     </li>
     <li class="iot-subnav__item">
-      <a href="{% url 'iot:panel_memberships' %}" class="button button-small{% if iot_active_section == 'memberships' %} iot-nav--active{% endif %}">{% trans "Pengguna & organisasi" %}</a>
-    </li>
-    <li class="iot-subnav__item">
-      <a href="{% url 'iot:panel_devices' %}" class="button button-small{% if iot_active_section == 'devices' %} iot-nav--active{% endif %}">{% trans "Perangkat" %}</a>
-    </li>
-    <li class="iot-subnav__item">
-      <a href="{% url 'iot:panel_ota' %}" class="button button-small{% if iot_active_section == 'ota' %} iot-nav--active{% endif %}">OTA</a>
+      <a href="{% url 'iot:panel_devices' %}" class="button button-small{% if iot_active_section == 'profiles' or iot_active_section == 'devices' or iot_active_section == 'registrations' or iot_active_section == 'firmware' or iot_active_section == 'ota' %} iot-nav--active{% endif %}"{% if iot_active_section == 'profiles' or iot_active_section == 'devices' or iot_active_section == 'registrations' or iot_active_section == 'firmware' or iot_active_section == 'ota' %} aria-current="page"{% endif %}>{% trans "Perangkat" %}</a>
     </li>
   </ul>
 </nav>
